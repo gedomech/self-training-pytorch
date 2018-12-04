@@ -43,7 +43,7 @@ def run(argv):
 
     # data for semi-supervised training
     # data_loaders = get_dataloader(hparam)
-    data_loaders = get_exclusive_dataloaders(hparam)
+    data_loaders = get_exclusive_dataloaders(hparam, shuffle=False)
 
     # selecting the labeled dataset to be used for the model
     data_loaders['labeled'] = data_loaders['labeled'][hparam['idx_model']]

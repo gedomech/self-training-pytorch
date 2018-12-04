@@ -7,3 +7,8 @@
 checkpoint/
 runs/*
 .DS_Store
+
+data/__pycache__/
+loss/__pycache__/
+models/__pycache__/
+utils/__pycache__/

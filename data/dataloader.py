@@ -237,6 +237,9 @@ def get_exclusive_dataloaders(hparam, shuffle=True):
                          'pin_memory': True}
 
     labeled_data = DataLoader(labeled_data, **labeled_loader_params)
+    labeled_data1 = DataLoader(labeled_data1, **labeled_loader_params)
+    labeled_data2 = DataLoader(labeled_data2, **labeled_loader_params)
+
     unlabeled_data = DataLoader(unlabeled_data, **unlabeled_loader_params)
     val_data = DataLoader(val_data, **val_loader_params)
 
