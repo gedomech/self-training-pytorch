@@ -34,7 +34,7 @@ def get_default_parameter():
     flags.DEFINE_string('save_dir', default=None, help='path to save')
     flags.DEFINE_float('labeled_percentate', default=1.0, help='how much percentage of labeled data you use')
     flags.DEFINE_integer('idx_model', default=0, help='indicate the index (0, 1 or 2) of the model to be pre-trained')
-    flags.DEFINE_float('performance_thres', default=100.0,
+    flags.DEFINE_float('performance_thres', default=1.0,
                        help='threshold [0 to 1.0] used to stop pre-training when performance in val achieve this value')
 
 

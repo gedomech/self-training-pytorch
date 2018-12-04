@@ -69,6 +69,11 @@ class Trainer(ABC):
             self.writer.add_scalars(self.name, metrics, epoch)
             self.checkpoint(dice, epoch, savedir)
 
+            if metrics['%s/val' % self.name] <= self.hparam['performance_thres']:
+                return 0
+            else:
+                return 1
+
     def _evaluate(self, dataloader, mode='eval'):
         assert mode in ('eval', 'train')
         dice_meter = AverageValueMeter()
@@ -168,6 +173,42 @@ class FullysupervisedTrainer(Trainer):
         criterion_hparam = extract_from_big_dict(self.hparam, FullysupervisedTrainer.criterion_keys)
         self.criterion = get_citerion(self.hparam['loss_name'], **criterion_hparam)
         self.criterion.to(device)
+
+    def start_training(self, savedir):
+        logger.info(self.name + '  Training starts:')
+        for epoch in range(self.hparam['max_epoch']):
+            self.evaluate(epoch, mode='train', savedir=savedir)
+            early_stop = self.evaluate(epoch, mode='eval', savedir=savedir)
+
+            if early_stop:
+                break
+
+            self._train(self.dataloader)
+            self.lrscheduler.step()
+
+    def evaluate(self, epoch, mode='eval', savedir=None):
+        with torch.no_grad():
+            metrics = {}
+            dice = self._evaluate(self.dataloader['labeled'], mode)
+            logger.info('at epoch: {:3d}, under {} mode, labeled_data dice: {:.3f} '.format(epoch, mode, dice))
+            # self.writer.add_scalar('%s/labeled' % self.name, dice, epoch)
+            metrics['%s/labeled' % self.name] = dice
+            dice = self._evaluate(self.dataloader['unlabeled'], mode)
+            logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f} '.format(epoch, mode, dice))
+            # self.writer.add_scalar('%s/unlabeled' % self.name, dice, epoch)
+            metrics['%s/unlabeled' % self.name] = dice
+            dice = self._evaluate(self.dataloader['val'], mode)
+            logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f} '.format(epoch, mode, dice))
+            # self.writer.add_scalar('%s/val' % self.name, dice, epoch)
+            metrics['%s/val' % self.name] = dice
+        if mode == 'eval':
+            self.writer.add_scalars(self.name, metrics, epoch)
+            self.checkpoint(dice, epoch, savedir)
+
+            if metrics['%s/val' % self.name] <= self.hparam['performance_thres']:
+                return 0
+            else:
+                return 1
 
     def _train(self, dataloader):
         assert self.torchnet.training == True
