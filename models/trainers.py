@@ -173,6 +173,7 @@ class FullysupervisedTrainer(Trainer):
         criterion_hparam = extract_from_big_dict(self.hparam, FullysupervisedTrainer.criterion_keys)
         self.criterion = get_citerion(self.hparam['loss_name'], **criterion_hparam)
         self.criterion.to(device)
+        self.performance_thres = hparam['performance_thres']
 
     def start_training(self, savedir):
         logger.info(self.name + '  Training starts:')
@@ -205,7 +206,7 @@ class FullysupervisedTrainer(Trainer):
             self.writer.add_scalars(self.name, metrics, epoch)
             self.checkpoint(dice, epoch, savedir)
 
-            if metrics['%s/val' % self.name] <= self.hparam['performance_thres']:
+            if metrics['%s/val' % self.name] <= self.performance_thres:
                 return 0
             else:
                 return 1
