@@ -3,11 +3,8 @@ import logging
 import sys
 import os
 
-logger = logging.getLogger(__name__)
-logger.parent = None
 
-
-def config_logger(log_dir):
+def config_logger(logger, log_dir):
     """ Get console handler """
     log_format = logging.Formatter("[%(module)s - %(asctime)s - %(levelname)s] %(message)s")
     logger.setLevel(logging.DEBUG)
@@ -20,5 +17,4 @@ def config_logger(log_dir):
 
     logger.handlers = [console_handler, fh]
 
-
-
+    return logger

@@ -251,7 +251,7 @@ class TrainWrapper(ABC):
         self.fulltrainer.set_writer(self.writer)
         self.semitrainer.set_writer(self.writer)
         self.save_hparams(hparams, self.writername)
-        config_logger(self.writername)
+        self.logger = config_logger(logger, self.writername)
 
     def run_fully_training(self):
         self.fulltrainer.start_training(self.writername)
@@ -259,10 +259,10 @@ class TrainWrapper(ABC):
     def run_semi_training(self, hparam):
         if hparam['load_pretrain'] == True:
             try:
-                logger.info('load checkpoint....')
+                self.logger.info('load checkpoint....')
                 self.semitrainer.load_checkpoint(hparam['model_path'])
             except Exception as e:
-                logger.error(e)
+                self.logger.error(e)
                 print('recheck your --model_path')
                 exit(1)
 
