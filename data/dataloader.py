@@ -1,14 +1,18 @@
 import os
 import random
+import logging
 
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageEnhance, ImageOps, ImageFilter
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 import warnings
 warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
+logger.parent = None
 
 num_class = 2
 spit_ratio = 0.9
@@ -151,7 +155,7 @@ class ISICdata(Dataset):
 
 
 def get_dataloader(hparam):
-    root = "../datasets/ISIC2018"
+    root = "datasets/ISIC2018"
     labeled_data = ISICdata(root=root, model='labeled', mode='semi', transform=True,
                             dataAugment=False, equalize=False)
     labeled_data.imgs = labeled_data.imgs[:int(len(labeled_data.imgs) * hparam['labeled_percentate'])]
@@ -187,7 +191,65 @@ def get_dataloader(hparam):
             'val': val_data}
 
 
-if __name__ =="__main__":
+def get_exclusive_dataloaders(hparam, shuffle=True):
+    root_path = "datasets/ISIC2018"
+    labeled_data = ISICdata(root=root_path, model='labeled', mode='semi', transform=True,
+                            dataAugment=False, equalize=False)
+    labeled_data1 = ISICdata(root=root_path, model='labeled', mode='semi', transform=True,
+                             dataAugment=False, equalize=False)
+    labeled_data2 = ISICdata(root=root_path, model='labeled', mode='semi', transform=True,
+                             dataAugment=False, equalize=False)
+
+    n_imgs_per_set = int(len(labeled_data.imgs) * hparam['labeled_percentate'])
+
+    if shuffle:
+        # randomizing the list of images and gts
+        np.random.seed(1)
+        data = list(zip(labeled_data.imgs, labeled_data.gts))
+        np.random.shuffle(data)
+        labeled_data.imgs, labeled_data.gts = zip(*data)
+
+    # creating the 3 exclusive labeled sets
+    labeled_data.imgs = labeled_data.imgs[:n_imgs_per_set]
+    labeled_data.gts = labeled_data.gts[:n_imgs_per_set]
+    labeled_data1.imgs = labeled_data.imgs[n_imgs_per_set:2 * n_imgs_per_set]
+    labeled_data1.gts = labeled_data.gts[n_imgs_per_set:2 * n_imgs_per_set]
+    labeled_data2.imgs = labeled_data.imgs[2 * n_imgs_per_set:3 * n_imgs_per_set]
+    labeled_data2.gts = labeled_data.gts[2 * n_imgs_per_set:3 * n_imgs_per_set]
+
+    unlabeled_data = ISICdata(root=root_path, model='unlabeled', mode='semi', transform=True,
+                              dataAugment=False, equalize=False)
+    val_data = ISICdata(root=root_path, model='val', mode='semi', transform=True,
+                        dataAugment=False, equalize=False)
+
+    labeled_loader_params = {'batch_size': hparam['num_workers'],
+                             'shuffle': True,  # True
+                             'num_workers': hparam['batch_size'],
+                             'pin_memory': True}
+
+    unlabeled_loader_params = {'batch_size': hparam['num_workers'],
+                               'shuffle': True,  # True
+                               'num_workers': hparam['batch_size'],
+                               'pin_memory': True}
+    val_loader_params = {'batch_size': hparam['num_workers'],
+                         'shuffle': False,  # True
+                         'num_workers': hparam['batch_size'],
+                         'pin_memory': True}
+
+    labeled_data = DataLoader(labeled_data, **labeled_loader_params)
+    unlabeled_data = DataLoader(unlabeled_data, **unlabeled_loader_params)
+    val_data = DataLoader(val_data, **val_loader_params)
+
+    logger.info('the size of labeled_data:{}, unlabeled_data:{}, val_data:{}'.format(labeled_data.__len__(),
+                                                                                     unlabeled_data.__len__(),
+                                                                                     val_data.__len__()))
+
+    return {'labeled': [labeled_data, labeled_data1, labeled_data2],
+            'unlabeled': unlabeled_data,
+            'val': val_data}
+
+
+if __name__ == "__main__":
     import platform
     from torchnet.meter import AverageValueMeter
     import tqdm

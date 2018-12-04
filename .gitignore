@@ -1,5 +1,6 @@
 # local files
-*/.idea/
+.idea*
+.DS_Store
 
 # pre-trained models
 .idea/*
