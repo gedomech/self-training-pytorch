@@ -210,12 +210,12 @@ def get_exclusive_dataloaders(hparam, shuffle=True):
         labeled_data.imgs, labeled_data.gts = zip(*data)
 
     # creating the 3 exclusive labeled sets
-    labeled_data.imgs = labeled_data.imgs[:n_imgs_per_set]
-    labeled_data.gts = labeled_data.gts[:n_imgs_per_set]
-    labeled_data1.imgs = labeled_data.imgs[n_imgs_per_set:2 * n_imgs_per_set]
-    labeled_data1.gts = labeled_data.gts[n_imgs_per_set:2 * n_imgs_per_set]
-    labeled_data2.imgs = labeled_data.imgs[2 * n_imgs_per_set:3 * n_imgs_per_set]
-    labeled_data2.gts = labeled_data.gts[2 * n_imgs_per_set:3 * n_imgs_per_set]
+    labeled_data1.imgs = labeled_data.imgs[:n_imgs_per_set]
+    labeled_data1.gts = labeled_data.gts[:n_imgs_per_set]
+    labeled_data2.imgs = labeled_data.imgs[n_imgs_per_set:2 * n_imgs_per_set]
+    labeled_data2.gts = labeled_data.gts[n_imgs_per_set:2 * n_imgs_per_set]
+    labeled_data.imgs = labeled_data.imgs[2 * n_imgs_per_set:3 * n_imgs_per_set]
+    labeled_data.gts = labeled_data.gts[2 * n_imgs_per_set:3 * n_imgs_per_set]
 
     unlabeled_data = ISICdata(root=root_path, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
@@ -236,9 +236,9 @@ def get_exclusive_dataloaders(hparam, shuffle=True):
                          'num_workers': hparam['batch_size'],
                          'pin_memory': True}
 
-    labeled_data = DataLoader(labeled_data, **labeled_loader_params)
     labeled_data1 = DataLoader(labeled_data1, **labeled_loader_params)
     labeled_data2 = DataLoader(labeled_data2, **labeled_loader_params)
+    labeled_data = DataLoader(labeled_data, **labeled_loader_params)
 
     unlabeled_data = DataLoader(unlabeled_data, **unlabeled_loader_params)
     val_data = DataLoader(val_data, **val_loader_params)
@@ -247,7 +247,7 @@ def get_exclusive_dataloaders(hparam, shuffle=True):
                                                                                      unlabeled_data.__len__(),
                                                                                      val_data.__len__()))
 
-    return {'labeled': [labeled_data, labeled_data1, labeled_data2],
+    return {'labeled': [labeled_data1, labeled_data2, labeled_data],
             'unlabeled': unlabeled_data,
             'val': val_data}
 
