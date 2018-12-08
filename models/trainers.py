@@ -127,6 +127,9 @@ class Trainer(ABC):
             dict2save['epoch'] = epoch
             dict2save['dice'] = dice
             dict2save['model'] = self.save_dict
+
+            # saving labeled data
+            dict2save['labeled_data'] = self.dataloader['labeled']
             if name is None:
                 torch.save(dict2save, 'best.pth')
             else:
