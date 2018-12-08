@@ -154,11 +154,20 @@ class ISICdata(Dataset):
         return int(len(self.imgs))
 
 
-def get_dataloader(hparam):
+def get_dataloader(hparam, shuffle=True):
     root = "datasets/ISIC2018"
     labeled_data = ISICdata(root=root, model='labeled', mode='semi', transform=True,
                             dataAugment=False, equalize=False)
+
+    if shuffle:
+        # randomizing the list of images and gts
+        np.random.seed(hparam['seed'])
+        data = list(zip(labeled_data.imgs, labeled_data.gts))
+        np.random.shuffle(data)
+        labeled_data.imgs, labeled_data.gts = zip(*data)
+
     labeled_data.imgs = labeled_data.imgs[:int(len(labeled_data.imgs) * hparam['labeled_percentate'])]
+
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,

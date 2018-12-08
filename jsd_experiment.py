@@ -1,4 +1,3 @@
-# coding=utf-8
 import logging
 import sys
 import os
@@ -45,11 +44,7 @@ def run(argv):
     hparam = flags.FLAGS.flag_values_dict()
 
     # data for semi-supervised training
-    data_loaders = get_dataloader(hparam)
-    # data_loaders = get_exclusive_dataloaders(hparam, shuffle=False)
-
-    # selecting the labeled dataset to be used for the model
-    data_loaders['labeled'] = data_loaders['labeled'][hparam['idx_model']]
+    data_loaders = get_dataloader(hparam, shuffle=True)
 
     # networks and optimisers
     net = Enet(2)
