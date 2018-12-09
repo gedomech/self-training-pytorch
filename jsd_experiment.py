@@ -4,7 +4,7 @@ import os
 
 from absl import flags, app
 from models.trainers import FullysupervisedTrainer, SemisupervisedTrainer, TrainWrapper
-from data.dataloader import get_dataloader, get_exclusive_dataloaders
+from data.dataloader import get_dataloader
 from models.enet import Enet
 from utils.helpers import *
 
