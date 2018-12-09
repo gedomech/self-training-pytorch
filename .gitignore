@@ -4,7 +4,6 @@
 
 # pre-trained models
 .idea/*
-checkpoint/
 runs/*
 .DS_Store
 
