@@ -13,6 +13,7 @@ import utils.mask_gene
 from loss.loss import get_citerion
 from utils.helpers import *
 from utils.logger import config_logger
+from data.dataloader import ISICdata
 
 logger = logging.getLogger(__name__)
 logger.parent = None
@@ -306,6 +307,23 @@ class TrainWrapper(ABC):
             try:
                 self.logger.info('load checkpoint....')
                 self.semitrainer.load_checkpoint(hparam['model_path'])
+                self.semitrainer.torchnet.train()
+                self.semitrainer.dataloader['labeled'].dataset.imgs = torch.load(hparam['model_path'],map_location=lambda storage, loc: storage)['labeled_data'].dataset.imgs
+                # print()
+
+                # root = "datasets/ISIC2018"
+                # dataset = ISICdata(root=root, model='labeled', mode='semi', transform=True,
+                #             dataAugment=False, equalize=False)
+                #
+                # dataset.imgs= torch.load(hparam['model_path'],map_location=lambda storage, loc: storage)['labeled_data'].dataset.imgs
+                # labeled_loader_params = {'batch_size': hparam['num_workers'],
+                #                          'shuffle': True,  # True
+                #                          'num_workers': hparam['batch_size'],
+                #                          'pin_memory': True}
+                # dataloader = DataLoader(dataset,**labeled_loader_params)
+                # self.semitrainer.dataloader['labeled']= dataloader
+
+
             except Exception as e:
                 self.logger.error(e)
                 print('recheck your --model_path')

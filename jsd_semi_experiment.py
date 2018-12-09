@@ -31,8 +31,9 @@ def get_default_parameter():
                          help='run_self_training')
     flags.DEFINE_boolean('load_pretrain', default=True,
                          help='load_pretrain for self training')
-    flags.DEFINE_string('model_path', default='', help='path to the pretrained model')
-    flags.DEFINE_string('save_dir', default=None, help='path to save')
+    flags.DEFINE_string('model_path', default='checkpoints', help='path to the pretrained model')
+    flags.DEFINE_string('loss_name', default='crossentropy', help='loss for semi supervised learning')
+    flags.DEFINE_string('save_dir', default='semi', help='path to save')
     flags.DEFINE_float('labeled_percentate', default=1.0, help='how much percentage of labeled data you use')
 
     flags.DEFINE_integer('max_epoch', default=200, help='max_epoch for full training')
@@ -54,13 +55,17 @@ def get_unlabeled_loss(lossname='crossentropy'):
     return criterion
 
 
-def load_checkpoint(torchnets, path: list):
+def load_checkpoint(labeled_data, torchnets, path: list):
     lab_dataloaders = []
+    import copy
     for path_i, net in zip(path, torchnets):
+        labeled_data_ = copy.deepcopy(labeled_data)
         model = torch.load(path_i, map_location=lambda storage, loc: storage)
         logger.info('Saved_epoch: {}, Dice: {:3f}'.format(model['epoch'], model['dice']))
-        net.load_state_dict(model['model'])
-        lab_dataloaders.append(model['labeled_data'])
+        labeled_data_.dataset.imgs = model['labeled_data'].dataset.imgs
+        labeled_data_.dataset.gts = model['labeled_data'].dataset.gts
+
+        lab_dataloaders.append(labeled_data_)
 
     return lab_dataloaders
 
@@ -103,54 +108,56 @@ def save_checkpoint(dice, nets, epoch, best_dice=-1, name=None):
             return
 
 
-def evaluate(epoch, nets, dataloader, name, writer, mode='eval', savedirs=None):
+def evaluate(epoch, nets, dataloader, name=None, writer=None, mode='eval', savedirs=None):
     with torch.no_grad():
-        metrics = {}
-        dices, dice_mv = _evaluate(dataloader['labeled'], nets, mode)
+        # dices  = _evaluate_mm(nets, dataloader['labeled'], mode)
+
+        ## for the labeled data
+        dice1 = _evaluate(net=nets[0], dataloader=dataloader['labeled'][0], mode='eval')
+        dice2 = _evaluate(net=nets[1], dataloader=dataloader['labeled'][1], mode='eval')
+        dice3 = _evaluate(net=nets[2], dataloader=dataloader['labeled'][2], mode='eval')
+
+        print('labeled dataset:{},{},{}'.format(dice1, dice2, dice3))
+
         logger.info('at epoch: {:3d}, under {} mode, labeled_data dice: {:.3f} '.format(epoch, mode, dice))
-        metrics['%s/labeled' % name] = dice
-        dices, dice_mv = _evaluate(dataloader['unlabeled'], nets, mode)
-        logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f} '.format(epoch, mode, dice))
-        metrics['%s/unlabeled' % name] = dice
-        dices, dice_mv = _evaluate(dataloader['val'], nets, mode)
-        logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f} '.format(epoch, mode, dice))
-        metrics['%s/val' % name] = dice
-    if mode == 'eval':
-        writer.add_scalars(name, metrics, epoch)
+        ## for unlabeled data
 
-        save_checkpoint(dice, epoch, savedirs)
+        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
+        ## update data, for to log.
+        print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
+
+        ## for val data
+        dices = _evaluate_mm(nets, dataloader['val'], mode='eval')
+
+        print('val datset: {},{},{}'.format(dices[0], dices[1], dices[2]))
+        # if mode == 'eval':
+        #     writer.add_scalars(name, metrics, epoch)
+
+        # save_checkpoint(dices, epoch, savedirs)
 
 
-def _evaluate(dataloader, nets, mode='eval'):
+def _evaluate_mm(nets, dataloader, mode):
+    return [_evaluate(net, dataloader, mode) for net in nets]
+
+
+def _evaluate(net, dataloader, mode='eval'):
     assert mode in ('eval', 'train')
-    dice_meter = [AverageValueMeter(), AverageValueMeter(), AverageValueMeter()]
-    dice_meter_mv = AverageValueMeter()
+    dice_meter = AverageValueMeter()
     if mode == 'eval':
-        _ = [x.eval() for x in nets]
+        net.eval()
     else:
-        _ = [x.train() for x in nets]
+        net.train()
 
     with torch.no_grad():
-        for i, (img, masks, _) in enumerate(dataloader):
-            img, masks = img.to(device), masks.to(device)
-            distributions = [], []
-            for net in nets:
-                pred_logit = net(img)
-                distributions.append(pred_logit)
-                pred_mask = pred2segmentation(pred_logit)
-                dice_meter[i].add(dice_loss(pred_mask, masks))
-
-        # compute pseudolabels based on the majority voting of ensemble models
-        pseudolabels = compute_pseudolabels(distributions)
-        dice_mv = compute_dice(pseudolabels.unsqueeze(1), masks)
-        dice_meter_mv.add(dice_mv)
-
+        for i, (img, gt, _) in enumerate(dataloader):
+            img, gt = img.to(device), gt.to(device)
+            pred_logit = net(img)
+            pred_mask = pred2segmentation(pred_logit)
+            dice_meter.add(dice_loss(pred_mask, gt))
     if mode == 'eval':
-        _ = [x.train() for x in nets]
-
-    for net in nets:
-        assert net.training == True, 'model is not set in train mode after evaluation stage'
-    return [x.value()[0] for x in dice_meter], dice_meter_mv.value()[0]
+        net.train()
+    assert net.training == True
+    return dice_meter.value()[0]
 
 
 def compute_dice(input, target):
@@ -158,11 +165,11 @@ def compute_dice(input, target):
     if input.shape[1] != 1: input = input.max(1)[1]
     smooth = 1.
 
-    iflat = input.view(input.size(0),-1)
-    tflat = target.view(input.size(0),-1)
+    iflat = input.view(input.size(0), -1)
+    tflat = target.view(input.size(0), -1)
     intersection = (iflat * tflat).sum(1)
 
-    return float(((2. * intersection + smooth).float() /  (iflat.sum(1) + tflat.sum(1) + smooth).float()).mean())
+    return float(((2. * intersection + smooth).float() / (iflat.sum(1) + tflat.sum(1) + smooth).float()).mean())
 
 
 def train_ensemble(nets_: list, data_loaders, hparam):
@@ -183,13 +190,16 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         'mv': 0,
         'jsd': 0}
 
-    nets_path = [os.path.join(hparam['save_dir'], 'enet_0/semi_best.pth'),
-                 os.path.join(hparam['save_dir'], 'enet_1/semi_best.pth'),
-                 os.path.join(hparam['save_dir'], 'enet_2/semi_best.pth')]
+    if not os.path.exists(hparam['save_dir']):
+        os.mkdir(hparam['save_dir'])
 
-    optimizers = [torch.optim.Adam(nets[0].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
-                  torch.optim.Adam(nets[1].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
-                  torch.optim.Adam(nets[2].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay'])]
+    nets_path = [os.path.join(hparam['save_dir'], 'enet_0_semi_best.pth'),
+                 os.path.join(hparam['save_dir'], 'enet_1_semi_best.pth'),
+                 os.path.join(hparam['save_dir'], 'enet_2_semi_best.pth')]
+
+    optimizers = [torch.optim.Adam(nets_[0].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
+                  torch.optim.Adam(nets_[1].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
+                  torch.optim.Adam(nets_[2].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay'])]
 
     schedulers = [MultiStepLR(optimizer=optimizers[0], milestones=hparam['milestones'], gamma=hparam['gamma']),
                   MultiStepLR(optimizer=optimizers[1], milestones=hparam['milestones'], gamma=hparam['gamma']),
@@ -201,12 +211,11 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         writername = 'runs/'
     writer = SummaryWriter(writername)
 
-    # lab_data_iters = [iter(dataloader) for dataloader in labeled_loader_]
     criterion = get_unlabeled_loss(hparam['loss_name'])
 
     print("STARTING THE BASELINE TRAINING!!!!")
     for epoch in range(hparam['max_epoch']):
-        evaluate(epoch + 1, mode='train', savedirs=nets_path)
+        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, mode='eval', writer=writer, savedirs=nets_path)
         print('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
 
         # train with labeled data
@@ -269,6 +278,7 @@ def train_ensemble(nets_: list, data_loaders, hparam):
 
 
 if __name__ == "__main__":
+    get_default_parameter()
     hparam = flags.FLAGS.flag_values_dict()
     class_number = 2
 
@@ -281,18 +291,18 @@ if __name__ == "__main__":
 
     nets = map_(lambda x: x.to(device), nets)
 
-
-
     # class_weigth = torch.Tensor(hparam['weight'])
     # criterion = CrossEntropyLoss2d(class_weigth).to(device) if (
     #         torch.cuda.is_available()) else CrossEntropyLoss2d(class_weigth)
     # ensemble_criterion = JensenShannonDivergence(reduce=True, size_average=False)
 
-    nets_path = [os.path.join(hparam['model_path'], 'enet_0/best.pth'),
-                 os.path.join(hparam['model_path'], 'enet_1/best.pth'),
-                 os.path.join(hparam['model_path'], 'enet_2/best.pth')]
+    nets_path = [os.path.join(hparam['model_path'], 'enet_0_best.pth'),
+                 os.path.join(hparam['model_path'], 'enet_1_best.pth'),
+                 os.path.join(hparam['model_path'], 'enet_2_best.pth')]
 
     root = "datasets/ISIC2018"
+    labeled_data = ISICdata(root=root, model='labeled', mode='semi', transform=True,
+                            dataAugment=False, equalize=False)
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
@@ -307,12 +317,26 @@ if __name__ == "__main__":
                          'num_workers': hparam['batch_size'],
                          'pin_memory': True}
 
-    labeled_loader = load_checkpoint(nets, nets_path)
+    labeled_loader = DataLoader(labeled_data, **unlabeled_loader_params)
     unlabeled_loader = DataLoader(unlabeled_data, **unlabeled_loader_params)
     val_loader = DataLoader(val_data, **val_loader_params)
+    labeled_loader = load_checkpoint(labeled_loader, nets, nets_path)
 
     data_loaders = {'labeled': labeled_loader,
                     'unlabeled': unlabeled_loader,
                     'val': val_loader}
 
-    train_ensemble(nets, nets_path, data_loaders, hparam)
+    # nets[0].load_state_dict(torch.load(nets_path[0], map_location=lambda storage, loc: storage)['model'])
+    # nets[0].train()
+    map_(lambda x, y: [x.load_state_dict(torch.load(y, map_location=lambda storage, loc: storage)['model']), x.train()],
+         nets,
+         nets_path)
+
+    # dice = _evaluate(nets[0], dataloader=data_loaders['val'], mode='eval')
+    # print(dice)
+    # dice = _evaluate(nets[0], dataloader=data_loaders['labeled'][0], mode='train')
+    # print(dice)
+    # dice = _evaluate(nets[0], dataloader=data_loaders['unlabeled'], mode='eval')
+    # print(dice)
+
+    train_ensemble(nets, data_loaders, hparam)

@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 import warnings
+
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
@@ -20,57 +21,56 @@ means = np.array([0.762824821091, 0.546326646928, 0.570878231817])
 stds = np.array([0.0985789149783, 0.0857434017536, 0.0947628491147])
 
 img_transform_std = transforms.Compose([
-    transforms.Resize((384,384)),
+    transforms.Resize((384, 384)),
     transforms.ToTensor(),
     transforms.Normalize(mean=means,
                          std=stds)
 ])
 
 img_transform_equal = transforms.Compose([
-    transforms.Resize((384,384)),
+    transforms.Resize((384, 384)),
     transforms.ToTensor(),
     # transforms.Normalize(mean=means,
     #                      std=stds)
 ])
 
-
 mask_transform = transforms.Compose([
-    transforms.Resize((384,384)),
+    transforms.Resize((384, 384)),
     transforms.ToTensor()
 ])
 
 
 class ISICdata(Dataset):
-    def __init__(self,root,model,mode,transform,dataAugment=False,equalize=False):
+    def __init__(self, root, model, mode, transform, dataAugment=False, equalize=False):
         super().__init__()
         self.dataAugment = dataAugment
         self.equalize = equalize
         self.transform = transform
-        assert mode in ('semi','full'), "the mode should be always in 'semi' or 'full', given '%s'."%mode
+        assert mode in ('semi', 'full'), "the mode should be always in 'semi' or 'full', given '%s'." % mode
         self.model = model
         self.mode = mode
         self.root = root
-        self.csv_root = os.path.join(root,'ISIC_Segmenation_dataset_split')
-        if self.mode=="full":
+        self.csv_root = os.path.join(root, 'ISIC_Segmenation_dataset_split')
+        if self.mode == "full":
             assert model in (
-            'train', 'dev'), "the model should be always in 'train', 'dev' and 'val', given '%s'." % model
-            if self.model=="train":
-                img_gts_list = pd.read_csv(os.path.join(self.csv_root,'train.csv'))
-            elif self.model=="dev":
-                img_gts_list = pd.read_csv(os.path.join(self.csv_root,'val.csv'))
+                'train', 'dev'), "the model should be always in 'train', 'dev' and 'val', given '%s'." % model
+            if self.model == "train":
+                img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'train.csv'))
+            elif self.model == "dev":
+                img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'val.csv'))
                 img_gts_list = img_gts_list.ix[:int(len(img_gts_list) / 2)]
             elif self.model == 'val':
                 img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'val.csv'))
                 img_gts_list = img_gts_list.ix[int(len(img_gts_list) / 2):]
             else:
                 raise NotImplemented
-        elif self.mode=="semi":
+        elif self.mode == "semi":
             assert model in ('labeled', 'unlabeled', 'dev',
                              'val'), "the model should be always in 'labeled', 'unlabeled' or 'test', given '%s'." % model
-            if self.model=="labeled":
-                img_gts_list = pd.read_csv(os.path.join(self.csv_root,'random_labeled_tr.csv'))
-            elif self.model=="unlabeled":
-                img_gts_list = pd.read_csv(os.path.join(self.csv_root,'random_unlabeled_tr.csv'))
+            if self.model == "labeled":
+                img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'random_labeled_tr.csv'))
+            elif self.model == "unlabeled":
+                img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'random_unlabeled_tr.csv'))
             elif self.model == "dev":
                 img_gts_list = pd.read_csv(os.path.join(self.csv_root, 'random_test.csv'))
                 img_gts_list = img_gts_list.ix[:int(len(img_gts_list) / 2)]
@@ -90,33 +90,35 @@ class ISICdata(Dataset):
         self.gts = ['ISIC2018_Task1_Training_GroundTruth_temp/' + x.replace(' ', '') for x in self.gts if
                     x.split('/')[0].replace('_segmentation.png', '.jpg').replace(' ', '') in imgs]
 
-        assert len(self.imgs)==len(self.gts)
+        assert len(self.imgs) == len(self.gts)
 
     def __getitem__(self, index):
-        img_path =self.imgs[index]
+        img_path = self.imgs[index]
         gt_path = self.gts[index]
 
-        img = Image.open(os.path.join(self.root,img_path)).convert('RGB')
-        gt = Image.open(os.path.join(self.root,gt_path))
+        assert list(filter(str.isdigit,os.path.basename(img_path))) == list(filter(str.isdigit,os.path.basename(gt_path))), 'dataloader wrong!'
+
+        img = Image.open(os.path.join(self.root, img_path)).convert('RGB')
+        gt = Image.open(os.path.join(self.root, gt_path))
 
         if self.equalize:
             img = ImageOps.equalize(img)
 
         if self.dataAugment:
-            img, gt = self.augment(img,gt)
+            img, gt = self.augment(img, gt)
 
         if self.transform:
             img = img_transform_equal(img) if self.equalize else img_transform_std(img)
             gt = mask_transform(gt)
 
-        return img.float(), gt.long(), (img_path,gt_path)
+        return img.float(), gt.long(), (img_path, gt_path)
 
     def augment(self, img, mask):
 
         if random.random() > 0.2:
             (w, h) = img.size
             (w_, h_) = mask.size
-            assert (w==w_ and h==h_),'The size should be the same.'
+            assert (w == w_ and h == h_), 'The size should be the same.'
             crop = random.uniform(0.45, 0.75)
             W = int(crop * w)
             H = int(crop * h)
@@ -139,13 +141,13 @@ class ISICdata(Dataset):
             angle = random.random() * 90 - 45
             img = img.rotate(angle)
             mask = mask.rotate(angle)
-        if random.random() > 0.8 :
+        if random.random() > 0.8:
             img = img.filter(ImageFilter.GaussianBlur(2))
 
-        if random.random()>0.8:
+        if random.random() > 0.8:
             img = ImageEnhance.Contrast(img).enhance(1)
 
-        if random.random()>0.8:
+        if random.random() > 0.8:
             img = ImageEnhance.Brightness(img).enhance(1)
 
         return img, mask
@@ -182,6 +184,7 @@ def get_dataloader(hparam, shuffle=True):
                                'shuffle': True,  # True
                                'num_workers': hparam['batch_size'],
                                'pin_memory': True}
+
     val_loader_params = {'batch_size': hparam['num_workers'],
                          'shuffle': False,  # True
                          'num_workers': hparam['batch_size'],
@@ -266,26 +269,25 @@ if __name__ == "__main__":
     from torchnet.meter import AverageValueMeter
     import tqdm
     from torch.utils.data import DataLoader
-    if platform.uname()[0]=="windows":
-        root ="E:\Applications\QuindiTech\ISICpaperBaseline\datasets\ISIC2018"
+
+    if platform.uname()[0] == "windows":
+        root = "E:\Applications\QuindiTech\ISICpaperBaseline\datasets\ISIC2018"
     else:
         root = "/home/guillermo/Documents/ETS_ResearchInternship/ISIC2018paperBaseline/datasets/ISIC2018"
     # ISICdata(root=root,model='dev',transform=None)
-    traintset = ISICdata(root=root,model='train',transform=True,equalize=True,dataAugment=True)
-    train_loader = DataLoader(traintset,batch_size=16,num_workers=8)
+    traintset = ISICdata(root=root, model='train', transform=True, equalize=True, dataAugment=True)
+    train_loader = DataLoader(traintset, batch_size=16, num_workers=8)
 
     fb_number = AverageValueMeter()
     bg_number = AverageValueMeter()
     fb_number.reset()
     bg_number.reset()
 
-    for i,(img,mask,_) in tqdm.tqdm(enumerate(train_loader)):
+    for i, (img, mask, _) in tqdm.tqdm(enumerate(train_loader)):
         fg = mask.sum()
-        bg = (1-mask).sum()
+        bg = (1 - mask).sum()
         fb_number.add(fg.item())
         bg_number.add(bg.item())
 
-    print(fb_number.value()[0],bg_number.value()[0])
-    print('background/forground_ratio is:',bg_number.value()[0]/fb_number.value()[0] )
-
-
+    print(fb_number.value()[0], bg_number.value()[0])
+    print('background/forground_ratio is:', bg_number.value()[0] / fb_number.value()[0])

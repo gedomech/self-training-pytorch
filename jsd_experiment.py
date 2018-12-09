@@ -23,7 +23,7 @@ def get_default_parameter():
                          help='update the labeled image while self training')
     flags.DEFINE_boolean('semi_train__update_unlabeled', default=True,
                          help='update the unlabeled image while self training')
-    flags.DEFINE_boolean('run_pretrain', default=True,
+    flags.DEFINE_boolean('run_pretrain', default=False,
                          help='run_pretrain')
     flags.DEFINE_boolean('run_semi', default=False,
                          help='run_self_training')
