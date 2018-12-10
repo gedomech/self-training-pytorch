@@ -169,6 +169,7 @@ def get_dataloader(hparam, shuffle=True):
         labeled_data.imgs, labeled_data.gts = zip(*data)
 
     labeled_data.imgs = labeled_data.imgs[:int(len(labeled_data.imgs) * hparam['labeled_percentate'])]
+    labeled_data.gts = labeled_data.gts[:int(len(labeled_data.gts) * hparam['labeled_percentate'])]
 
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
