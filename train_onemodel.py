@@ -7,6 +7,7 @@ from absl import flags, app
 from models.trainers import FullysupervisedTrainer, SemisupervisedTrainer, TrainWrapper
 from data.dataloader import get_dataloader, get_exclusive_dataloaders
 from models.enet import Enet
+from models.networks import UNet, SegNet
 from utils.helpers import *
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def get_default_parameter():
     flags.DEFINE_float('performance_thres', default=1.0,
                        help='threshold [0 to 1.0] used to stop pre-training when performance in val achieve this value')
     flags.DEFINE_integer('seed', default=1, help='seed to be used by numpy to generate')
+    flags.DEFINE_string('arch', default='enet', help='architecture to be trained')
 
 
 def run(argv):
@@ -46,13 +48,20 @@ def run(argv):
 
     # data for semi-supervised training
     data_loaders = get_dataloader(hparam)
-    # data_loaders = get_exclusive_dataloaders(hparam, shuffle=False)
 
-    # selecting the labeled dataset to be used for the model
-    data_loaders['labeled'] = data_loaders['labeled'][hparam['idx_model']]
+    # # selecting the labeled dataset to be used for the model
+    # data_loaders['labeled'] = data_loaders['labeled'][hparam['idx_model']]
 
     # networks and optimisers
-    net = Enet(2)
+    if hparam['arch'] == 'enet':
+        net = Enet(2)
+    elif hparam['arch'] == 'unet':
+        net = UNet(2)
+    elif hparam['arch'] == 'segnet':
+        net = SegNet(2)
+    else:
+        raise(hparam['arch'] + ' not implemented')
+
     net = net.to(device)
 
     fully_trainer = FullysupervisedTrainer(net, data_loaders, hparam)

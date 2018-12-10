@@ -230,7 +230,6 @@ class UNet(nn.Module):
                 {'params': self.get_decoder_params()}]
 
 
-
 class SegNetEnc(nn.Module):
 
     def __init__(self, in_channels, out_channels, num_layers):
@@ -256,6 +255,7 @@ class SegNetEnc(nn.Module):
 
     def forward(self, x):
         return self.encode(x)
+
 
 # this is not the right implementation of using index of maxpooling
 class SegNet(nn.Module):
