@@ -92,7 +92,7 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
         dict2save['epoch'] = epoch
         dict2save['dice'] = dices[i]
         dict2save['dice_mv'] = dice_mv
-        dict2save['model'] = net.save_dict
+        dict2save['model'] = net.state_dict()
         if name is None:
             torch.save(dict2save, save_dirs[i].replace('_best.pth', '_last.pth'))
         else:
