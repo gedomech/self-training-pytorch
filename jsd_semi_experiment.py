@@ -214,7 +214,7 @@ def mv_test(nets_, test_loader_, device):
 
             pseudolabels = compute_pseudolabels(distri)
             mv_dice_score = dice_loss(pseudolabels, mask.squeeze(1))
-            mv_dice_score_meter.add(mv_dice_score.item())
+            mv_dice_score_meter.add(mv_dice_score)
 
             # distributions /= 3
             # mv_dice_score = dice_loss(pred2segmentation(distributions), mask.squeeze(1))
@@ -313,8 +313,8 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
 
         # train with labeled data
-        for _ in range(len(data_loaders['unlabeled'])):
-            # train with labeled data
+        for _ in range(len(data_loaders['labeled'])):
+            #logger.info('train with labeled data')
             llost_lst, prediction_lst, dice_score_lst = [], [], []
             for lab_loader, net_i in zip(data_loaders['labeled'], nets_):
                 imgs, masks, _ = image_batch_generator(lab_loader, device=device)
@@ -322,7 +322,7 @@ def train_ensemble(nets_: list, data_loaders, hparam):
                 llost_lst.append(llost)
                 prediction_lst.append(prediction)
 
-            # train with unlabeled data
+            #logger.info('train with unlabeled data')
             imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
             pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
             total_loss = []
@@ -340,13 +340,13 @@ def train_ensemble(nets_: list, data_loaders, hparam):
                 optimizers[idx].step()
                 schedulers[idx].step()
 
-        _, dice_mv = test(nets_, data_loaders['val'], device=device)
+        _, dice_mv = mv_test(nets_, data_loaders['val'], device=device)
 
-        if dice_mv > best_dice_mv:
-            best_dice_mv = dice_mv
+        if dice_mv.value()[0] > best_dice_mv:
+            best_dice_mv = dice_mv.value()[0]
             best_performance = True
 
-        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
+        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv.value()[0], best=best_performance, name='train',
                  writer=writer, mode='eval', savedirs=nets_path, logger=logger)
 
 
