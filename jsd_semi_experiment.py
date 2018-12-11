@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 import warnings
 import torch
+import copy
 
 from absl import flags, app
 from data.dataloader import ISICdata
@@ -20,8 +21,8 @@ warnings.filterwarnings('ignore')
 
 
 def get_default_parameter():
-    flags.DEFINE_integer('num_workers', default=4, help='number of workers used in dataloader')
-    flags.DEFINE_integer('batch_size', default=4, help='number of batch size')
+    flags.DEFINE_integer('num_workers', default=2, help='number of workers used in dataloader')
+    flags.DEFINE_integer('batch_size', default=2, help='number of batch size')
     flags.DEFINE_boolean('semi_train__update_labeled', default=True,
                          help='update the labeled image while self training')
     flags.DEFINE_boolean('semi_train__update_unlabeled', default=True,
@@ -95,8 +96,8 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
         dict2save['model'] = net.state_dict()
         if name is None:
             torch.save(dict2save, save_dirs[i].replace('_best.pth', '_last.pth'))
-        else:
-            torch.save(dict2save, name + '/last.pth')
+        # else:
+        #     torch.save(dict2save, name + '/last.pth')
 
         if best_performance:
             dict2save = dict()
@@ -106,13 +107,13 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
             dict2save['model'] = net.state_dict()
             if name is None:
                 torch.save(dict2save, save_dirs[i])
-            else:
-                torch.save(dict2save, name + '/best.pth')
+            # else:
+            #     torch.save(dict2save, name + '/best.pth')
         else:
             return
 
 
-def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=None, mode='eval', savedirs=None):
+def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=None, mode='eval', savedirs=None, logger=None):
     with torch.no_grad():
         metrics = {}
         # dices  = _evaluate_mm(nets, dataloader['labeled'], mode)
@@ -131,17 +132,17 @@ def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=N
                                                                                                        dice1,
                                                                                                        dice2,
                                                                                                        dice3))
-        # for unlabeled data
-        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
-        for i, dice in enumerate(dices):
-            metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
-        # update data, for to log.
-        # print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
-        logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
-                                                                                                       mode,
-                                                                                                       dices[0],
-                                                                                                       dices[1],
-                                                                                                       dices[2]))
+        # # for unlabeled data
+        # # dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
+        # for i, dice in enumerate(dices):
+        #     metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
+        # # update data, for to log.
+        # # print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
+        # logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
+        #                                                                                                mode,
+        #                                                                                                dices[0],
+        #                                                                                                dices[1],
+        #                                                                                                dices[2]))
 
         ## for val data
         dices = _evaluate_mm(nets, dataloader['val'], mode='eval')
@@ -236,6 +237,23 @@ def compute_dice(input, target):
     return float(((2. * intersection + smooth).float() / (iflat.sum(1) + tflat.sum(1) + smooth).float()).mean())
 
 
+def save_hparams(hparams, writername):
+    hparams = copy.deepcopy(hparams)
+    import pandas as pd
+    message = ''
+    message += '----------------- Options ---------------\n'
+    for k, v in sorted(hparams.items()):
+        comment = ''
+        message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
+    message += '----------------- End -------------------'
+    print(message)
+    file_name = os.path.join(writername, 'opt.txt')
+    with open(file_name, 'wt') as opt_file:
+        opt_file.write(message)
+        opt_file.write('\n')
+    pd.Series(hparams).to_csv(os.path.join(writername, 'opt.csv'))
+
+
 def train_ensemble(nets_: list, data_loaders, hparam):
     """
     This function performs the training of the pre-trained models with the labeled and unlabeled data.
@@ -254,15 +272,9 @@ def train_ensemble(nets_: list, data_loaders, hparam):
     #     'mv': 0,
     #     'jsd': 0}
     best_dice_mv = -1
+    dice_mv = 0
     best_performance = False
     global logger
-    if not os.path.exists(hparam['save_dir']):
-        os.mkdir(hparam['save_dir'])
-
-    nets_path = [os.path.join(hparam['save_dir'], 'enet_0_semi_best.pth'),
-                 os.path.join(hparam['save_dir'], 'enet_1_semi_best.pth'),
-                 os.path.join(hparam['save_dir'], 'enet_2_semi_best.pth')]
-
     optimizers = [torch.optim.Adam(nets_[0].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
                   torch.optim.Adam(nets_[1].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
                   torch.optim.Adam(nets_[2].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay'])]
@@ -275,8 +287,17 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         writername = 'runs/' + hparam['save_dir']
     else:
         writername = 'runs/'
+
+    if not os.path.exists(writername):
+        os.mkdir(writername)
+
+    nets_path = [os.path.join(writername, 'enet_0_semi_best.pth'),
+                 os.path.join(writername, 'enet_1_semi_best.pth'),
+                 os.path.join(writername, 'enet_2_semi_best.pth')]
+
     writer = SummaryWriter(writername)
-    config_logger(logger, writername)
+    save_hparams(hparam, writername)
+    logger = config_logger(logger, writername)
 
     lcriterion = get_unlabeled_loss('crossentropy', device=device)
     if hparam['loss_name'] == 'crossentropy':
@@ -284,12 +305,12 @@ def train_ensemble(nets_: list, data_loaders, hparam):
     elif hparam['loss_name'] == 'jsd':
         unlcriterion = get_unlabeled_loss('jsd')
 
-
-    print("STARTING THE BASELINE TRAINING!!!!")
+    logger.info("STARTING THE ENSEMBLE TRAINING!!!!")
     for epoch in range(hparam['max_epoch']):
 
-        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, name='train', mode='eval', writer=writer, savedirs=nets_path)
-        print('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
+        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
+                 writer=writer, mode='train', savedirs=nets_path, logger=logger)
+        logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
 
         # train with labeled data
         for _ in range(len(data_loaders['unlabeled'])):
@@ -325,8 +346,8 @@ def train_ensemble(nets_: list, data_loaders, hparam):
             best_dice_mv = dice_mv
             best_performance = True
 
-        evaluate(epoch + 1, nets=nets_, dice_mv=dice_mv, best=best_performance,
-                 dataloader=data_loaders, mode='eval', writer=writer, savedirs=nets_path)
+        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
+                 writer=writer, mode='eval', savedirs=nets_path, logger=logger)
 
 
 if __name__ == "__main__":
