@@ -5,6 +5,7 @@ import logging
 import warnings
 import torch
 import copy
+import pathlib
 
 from absl import flags, app
 from data.dataloader import ISICdata
@@ -21,8 +22,8 @@ warnings.filterwarnings('ignore')
 
 
 def get_default_parameter():
-    flags.DEFINE_integer('num_workers', default=2, help='number of workers used in dataloader')
-    flags.DEFINE_integer('batch_size', default=2, help='number of batch size')
+    flags.DEFINE_integer('num_workers', default=4, help='number of workers used in dataloader')
+    flags.DEFINE_integer('batch_size', default=4, help='number of batch size')
     flags.DEFINE_boolean('semi_train__update_labeled', default=True,
                          help='update the labeled image while self training')
     flags.DEFINE_boolean('semi_train__update_unlabeled', default=True,
@@ -35,13 +36,13 @@ def get_default_parameter():
                          help='load_pretrain for self training')
     flags.DEFINE_string('model_path', default='checkpoints', help='path to the pretrained model')
     flags.DEFINE_string('loss_name', default='crossentropy', help='loss for semi supervised learning')
-    flags.DEFINE_string('save_dir', default='semi', help='path to save')
+    flags.DEFINE_string('save_dir', default='demo_jsd/selftrain_0.04/use_ce', help='path to save')
     flags.DEFINE_float('labeled_percentate', default=1.0, help='how much percentage of labeled data you use')
 
-    flags.DEFINE_integer('max_epoch', default=200, help='max_epoch for full training')
+    flags.DEFINE_integer('max_epoch', default=100, help='max_epoch for full training')
     flags.DEFINE_multi_integer('milestones', default=[20, 40, 60, 80, 100, 120, 140, 160, 180],
                                help='milestones for full training')
-    flags.DEFINE_float('gamma', default=0.5, help='gamma for lr_scheduler in full training')
+    flags.DEFINE_float('gamma', default=0.8, help='gamma for lr_scheduler in full training')
     flags.DEFINE_float('lr', default=0.001, help='lr for full training')
     flags.DEFINE_float('lr_decay', default=0.2, help='decay of learning rate schedule')
     flags.DEFINE_multi_float('weight', default=[1, 1], help='weight balance for CE for full training')
@@ -132,17 +133,17 @@ def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=N
                                                                                                        dice1,
                                                                                                        dice2,
                                                                                                        dice3))
-        # # for unlabeled data
-        # # dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
-        # for i, dice in enumerate(dices):
-        #     metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
-        # # update data, for to log.
-        # # print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
-        # logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
-        #                                                                                                mode,
-        #                                                                                                dices[0],
-        #                                                                                                dices[1],
-        #                                                                                                dices[2]))
+        # for unlabeled data
+        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
+        for i, dice in enumerate(dices):
+            metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
+        # update data, for to log.
+        # print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
+        logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
+                                                                                                       mode,
+                                                                                                       dices[0],
+                                                                                                       dices[1],
+                                                                                                       dices[2]))
 
         ## for val data
         dices = _evaluate_mm(nets, dataloader['val'], mode='eval')
@@ -222,7 +223,7 @@ def mv_test(nets_, test_loader_, device):
 
     map_(lambda x: x.train(), nets_)
 
-    return [dice_meters_test[idx] for idx in range(3)], mv_dice_score_meter
+    return [dice_meters_test[idx] for idx in range(3)], mv_dice_score_meter.value()[0]
 
 
 def compute_dice(input, target):
@@ -289,7 +290,8 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         writername = 'runs/'
 
     if not os.path.exists(writername):
-        os.mkdir(writername)
+        pathlib.Path(writername).mkdir(parents=True, exist_ok=True)
+        #os.mkdir(writername)
 
     nets_path = [os.path.join(writername, 'enet_0_semi_best.pth'),
                  os.path.join(writername, 'enet_1_semi_best.pth'),
@@ -307,10 +309,10 @@ def train_ensemble(nets_: list, data_loaders, hparam):
 
     logger.info("STARTING THE ENSEMBLE TRAINING!!!!")
     for epoch in range(hparam['max_epoch']):
-
+        
         evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
                  writer=writer, mode='train', savedirs=nets_path, logger=logger)
-        logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
+        #logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
 
         # train with labeled data
         for _ in range(len(data_loaders['labeled'])):
@@ -341,12 +343,14 @@ def train_ensemble(nets_: list, data_loaders, hparam):
                 schedulers[idx].step()
 
         _, dice_mv = mv_test(nets_, data_loaders['val'], device=device)
+        
+        #print('dice_mv at the end ', dice_mv, dice_mv)
 
-        if dice_mv.value()[0] > best_dice_mv:
-            best_dice_mv = dice_mv.value()[0]
+        if dice_mv > best_dice_mv:
+            best_dice_mv = dice_mv
             best_performance = True
 
-        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv.value()[0], best=best_performance, name='train',
+        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
                  writer=writer, mode='eval', savedirs=nets_path, logger=logger)
 
 
