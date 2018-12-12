@@ -7,6 +7,7 @@ import pandas as pd
 from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+import torch
 
 import warnings
 
@@ -20,12 +21,34 @@ spit_ratio = 0.9
 means = np.array([0.762824821091, 0.546326646928, 0.570878231817])
 stds = np.array([0.0985789149783, 0.0857434017536, 0.0947628491147])
 
+
+class NormalizeInverse(transforms.Normalize):
+    """
+    Undoes the normalization and returns the reconstructed images in the input domain.
+    """
+
+    def __init__(self, mean, std):
+        mean = torch.as_tensor(mean)
+        std = torch.as_tensor(std)
+        std_inv = 1 / (std + 1e-7)
+        mean_inv = -mean * std_inv
+        super().__init__(mean=mean_inv, std=std_inv)
+
+    def __call__(self, tensor):
+        return super().__call__(tensor.clone())
+
+
 img_transform_std = transforms.Compose([
     transforms.Resize((384, 384)),
     transforms.ToTensor(),
     transforms.Normalize(mean=means,
                          std=stds)
 ])
+
+tensorIMG2plt = transforms.Compose([
+    NormalizeInverse(mean=means,
+                     std=stds),
+    transforms.ToPILImage()])
 
 img_transform_equal = transforms.Compose([
     transforms.Resize((384, 384)),
@@ -90,13 +113,16 @@ class ISICdata(Dataset):
         self.gts = ['ISIC2018_Task1_Training_GroundTruth_temp/' + x.replace(' ', '') for x in self.gts if
                     x.split('/')[0].replace('_segmentation.png', '.jpg').replace(' ', '') in imgs]
 
+        self.inverse_std = tensorIMG2plt
+
         assert len(self.imgs) == len(self.gts)
 
     def __getitem__(self, index):
         img_path = self.imgs[index]
         gt_path = self.gts[index]
 
-        assert list(filter(str.isdigit,os.path.basename(img_path))) == list(filter(str.isdigit,os.path.basename(gt_path))), 'dataloader wrong!'
+        assert list(filter(str.isdigit, os.path.basename(img_path))) == list(
+            filter(str.isdigit, os.path.basename(gt_path))), 'dataloader wrong!'
 
         img = Image.open(os.path.join(self.root, img_path)).convert('RGB')
         gt = Image.open(os.path.join(self.root, gt_path))

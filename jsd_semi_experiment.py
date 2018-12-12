@@ -6,6 +6,7 @@ import warnings
 import torch
 import copy
 import pathlib
+import matplotlib.pyplot as plt
 
 from absl import flags, app
 from data.dataloader import ISICdata
@@ -19,11 +20,13 @@ from utils.logger import config_logger
 logger = logging.getLogger(__name__)
 logger.parent = None
 warnings.filterwarnings('ignore')
+global writer
+
 
 
 def get_default_parameter():
     flags.DEFINE_integer('num_workers', default=4, help='number of workers used in dataloader')
-    flags.DEFINE_integer('batch_size', default=4, help='number of batch size')
+    flags.DEFINE_integer('batch_size', default=1, help='number of batch size')
     flags.DEFINE_boolean('semi_train__update_labeled', default=True,
                          help='update the labeled image while self training')
     flags.DEFINE_boolean('semi_train__update_unlabeled', default=True,
@@ -114,36 +117,37 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
             return
 
 
-def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=None, mode='eval', savedirs=None, logger=None):
+def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=None, mode='eval', savedirs=None,
+             logger=None):
     with torch.no_grad():
-        metrics = {}
-        # dices  = _evaluate_mm(nets, dataloader['labeled'], mode)
 
+        metrics = {}
         # for the labeled data
-        dice1 = _evaluate(net=nets[0], dataloader=dataloader['labeled'][0], mode='eval')
-        dice2 = _evaluate(net=nets[1], dataloader=dataloader['labeled'][1], mode='eval')
-        dice3 = _evaluate(net=nets[2], dataloader=dataloader['labeled'][2], mode='eval')
+        dice1 = _evaluate(net=nets[0], dataloader=dataloader['labeled'][0], mode='eval', model_name='1',
+                          alias='labeled', epoch=epoch)
+        dice2 = _evaluate(net=nets[1], dataloader=dataloader['labeled'][1], mode='eval', model_name='2',
+                          alias='labeled', epoch=epoch)
+        dice3 = _evaluate(net=nets[2], dataloader=dataloader['labeled'][2], mode='eval', model_name='3',
+                          alias='labeled', epoch=epoch)
         metrics['{}/labeled/enet_{}'.format(name, 0)] = dice1
         metrics['{}/labeled/enet_{}'.format(name, 1)] = dice2
         metrics['{}/labeled/enet_{}'.format(name, 2)] = dice3
 
-        # print('labeled dataset:{},{},{}'.format(dice1, dice2, dice3))
         logger.info('at epoch: {:3d}, under {} mode, labeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
                                                                                                        mode,
                                                                                                        dice1,
                                                                                                        dice2,
                                                                                                        dice3))
         # for unlabeled data
-        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval')
+        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval', alias='unlabeled')
         for i, dice in enumerate(dices):
             metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
-        # update data, for to log.
-        # print('unlabeled datset: {}, {}, {}'.format(dices[0], dices[1], dices[2]))
+
         logger.info('at epoch: {:3d}, under {} mode, unlabeled_data dice: {:.3f}, {:.3f}, {:.3f}'.format(epoch,
-                                                                                                       mode,
-                                                                                                       dices[0],
-                                                                                                       dices[1],
-                                                                                                       dices[2]))
+                                                                                                         mode,
+                                                                                                         dices[0],
+                                                                                                         dices[1],
+                                                                                                         dices[2]))
 
         ## for val data
         dices = _evaluate_mm(nets, dataloader['val'], mode='eval')
@@ -151,23 +155,45 @@ def evaluate(epoch, nets, dataloader, dice_mv=0, best=False, name=None, writer=N
             metrics['{}/val/enet_{}'.format(name, i)] = dice
 
         metrics['{}/unlabeled/majority_voting'.format(name)] = dice
-        # print('val datset: {},{},{}'.format(dices[0], dices[1], dices[2]))
+
         logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f}, {:.3f}, {:.3f} and mv {:.3f}'.format(epoch,
                                                                                                                  mode,
-                                                                                                                 dices[0],
-                                                                                                                 dices[1],
-                                                                                                                 dices[2],
+                                                                                                                 dices[
+                                                                                                                     0],
+                                                                                                                 dices[
+                                                                                                                     1],
+                                                                                                                 dices[
+                                                                                                                     2],
                                                                                                                  dice_mv))
+
+        _, dice_mv = mv_test(nets, data_loaders['val'], device=device)
+
         if mode == 'eval':
             writer.add_scalars(name, metrics, epoch)
             save_checkpoint(dices, dice_mv, nets, epoch, best_performance=best, save_dirs=savedirs)
 
 
-def _evaluate_mm(nets, dataloader, mode):
-    return [_evaluate(net, dataloader, mode) for net in nets]
+def _evaluate_mm(nets, dataloader, mode, alias):
+    return [_evaluate(net, dataloader, mode, model_name=i, alias=alias) for (net, i) in zip(nets, ('1', '2', '3'))]
 
 
-def _evaluate(net, dataloader, mode='eval'):
+def _show_mask(dataloader, img, gt, predict):
+    img = np.array(dataloader.dataset.inverse_std(img))
+    assert img.shape.__len__() == 3
+    assert img.shape[2] == 3
+    gt = gt.squeeze()
+    assert gt.shape.__len__() == 2
+    fig = plt.figure(1)
+    plt.imshow(img)
+    plt.contour(gt, colors='red')
+    plt.contour(predict, colors='green')
+    return fig
+
+
+def _evaluate(net, dataloader, mode='eval', model_name=None, alias=None, epoch=0):
+    global writer
+    showimgList = dataloader.dataset.imgs[:10]
+
     assert mode in ('eval', 'train')
     dice_meter = AverageValueMeter()
     if mode == 'eval':
@@ -176,10 +202,15 @@ def _evaluate(net, dataloader, mode='eval'):
         net.train()
 
     with torch.no_grad():
-        for i, (img, gt, _) in enumerate(dataloader):
+        for i, (img, gt, (name, _)) in enumerate(dataloader):
             img, gt = img.to(device), gt.to(device)
             pred_logit = net(img)
             pred_mask = pred2segmentation(pred_logit)
+            for j, _name in enumerate(name):
+                if _name in showimgList:
+                    fig = _show_mask(dataloader, img[j], gt[j], pred_mask[j])
+                    writer.add_figure('%s/%s/%s' % (model_name, alias, os.path.basename(name[0])), fig, epoch)
+
             dice_meter.add(dice_loss(pred_mask, gt))
     if mode == 'eval':
         net.train()
@@ -260,18 +291,6 @@ def train_ensemble(nets_: list, data_loaders, hparam):
     This function performs the training of the pre-trained models with the labeled and unlabeled data.
     """
     #  loading pre-trained models
-
-    # _ = []
-    #
-    # map_(lambda x, y: [x.load_state_dict(torch.load(y, map_location='cpu')), x.train()], nets_, nets_path_)
-    records = []
-    # historical_score_dict = {
-    #     'epoch': -1,
-    #     'enet_0': 0,
-    #     'enet_1': 0,
-    #     'enet_2': 0,
-    #     'mv': 0,
-    #     'jsd': 0}
     best_dice_mv = -1
     dice_mv = 0
     best_performance = False
@@ -291,11 +310,12 @@ def train_ensemble(nets_: list, data_loaders, hparam):
 
     if not os.path.exists(writername):
         pathlib.Path(writername).mkdir(parents=True, exist_ok=True)
-        #os.mkdir(writername)
+        # os.mkdir(writername)
 
     nets_path = [os.path.join(writername, 'enet_0_semi_best.pth'),
                  os.path.join(writername, 'enet_1_semi_best.pth'),
                  os.path.join(writername, 'enet_2_semi_best.pth')]
+    global  writer
 
     writer = SummaryWriter(writername)
     save_hparams(hparam, writername)
@@ -306,17 +326,19 @@ def train_ensemble(nets_: list, data_loaders, hparam):
         unlcriterion = get_unlabeled_loss('crossentropy', device=device)
     elif hparam['loss_name'] == 'jsd':
         unlcriterion = get_unlabeled_loss('jsd')
+    else:
+        raise NotImplementedError
 
     logger.info("STARTING THE ENSEMBLE TRAINING!!!!")
     for epoch in range(hparam['max_epoch']):
-        
+
         evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
-                 writer=writer, mode='train', savedirs=nets_path, logger=logger)
-        #logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
+                 writer=writer, mode='eval', savedirs=nets_path, logger=logger)
+        # logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
 
         # train with labeled data
         for _ in range(len(data_loaders['labeled'])):
-            #logger.info('train with labeled data')
+            # logger.info('train with labeled data')
             llost_lst, prediction_lst, dice_score_lst = [], [], []
             for lab_loader, net_i in zip(data_loaders['labeled'], nets_):
                 imgs, masks, _ = image_batch_generator(lab_loader, device=device)
@@ -324,7 +346,7 @@ def train_ensemble(nets_: list, data_loaders, hparam):
                 llost_lst.append(llost)
                 prediction_lst.append(prediction)
 
-            #logger.info('train with unlabeled data')
+            # logger.info('train with unlabeled data')
             imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
             pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
             total_loss = []
@@ -342,16 +364,11 @@ def train_ensemble(nets_: list, data_loaders, hparam):
                 optimizers[idx].step()
                 schedulers[idx].step()
 
-        _, dice_mv = mv_test(nets_, data_loaders['val'], device=device)
-        
-        #print('dice_mv at the end ', dice_mv, dice_mv)
+        # print('dice_mv at the end ', dice_mv, dice_mv)
 
         if dice_mv > best_dice_mv:
             best_dice_mv = dice_mv
             best_performance = True
-
-        evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, dice_mv=dice_mv, best=best_performance, name='train',
-                 writer=writer, mode='eval', savedirs=nets_path, logger=logger)
 
 
 if __name__ == "__main__":
@@ -369,11 +386,6 @@ if __name__ == "__main__":
 
     nets = map_(lambda x: x.to(device), nets)
 
-    # class_weigth = torch.Tensor(hparam['weight'])
-    # criterion = CrossEntropyLoss2d(class_weigth).to(device) if (
-    #         torch.cuda.is_available()) else CrossEntropyLoss2d(class_weigth)
-    # ensemble_criterion = JensenShannonDivergence(reduce=True, size_average=False)
-
     nets_path = [os.path.join(hparam['model_path'], 'enet_0_best.pth'),
                  os.path.join(hparam['model_path'], 'enet_1_best.pth'),
                  os.path.join(hparam['model_path'], 'enet_2_best.pth')]
@@ -386,13 +398,13 @@ if __name__ == "__main__":
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
 
-    unlabeled_loader_params = {'batch_size': hparam['num_workers'],
+    unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,
-                               'num_workers': hparam['batch_size'],
+                               'num_workers': hparam['num_workers'],
                                'pin_memory': True}
-    val_loader_params = {'batch_size': hparam['num_workers'],
+    val_loader_params = {'batch_size': hparam['batch_size'],
                          'shuffle': False,
-                         'num_workers': hparam['batch_size'],
+                         'num_workers': hparam['num_workers'],
                          'pin_memory': True}
 
     labeled_loader = DataLoader(labeled_data, **unlabeled_loader_params)
@@ -409,12 +421,5 @@ if __name__ == "__main__":
     map_(lambda x, y: [x.load_state_dict(torch.load(y, map_location=lambda storage, loc: storage)['model']), x.train()],
          nets,
          nets_path)
-
-    # dice = _evaluate(nets[0], dataloader=data_loaders['val'], mode='eval')
-    # print(dice)
-    # dice = _evaluate(nets[0], dataloader=data_loaders['labeled'][0], mode='train')
-    # print(dice)
-    # dice = _evaluate(nets[0], dataloader=data_loaders['unlabeled'], mode='eval')
-    # print(dice)
 
     train_ensemble(nets, data_loaders, hparam)
