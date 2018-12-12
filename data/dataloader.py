@@ -20,6 +20,7 @@ num_class = 2
 spit_ratio = 0.9
 means = np.array([0.762824821091, 0.546326646928, 0.570878231817])
 stds = np.array([0.0985789149783, 0.0857434017536, 0.0947628491147])
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class NormalizeInverse(transforms.Normalize):
@@ -28,8 +29,8 @@ class NormalizeInverse(transforms.Normalize):
     """
 
     def __init__(self, mean, std):
-        mean = torch.as_tensor(mean)
-        std = torch.as_tensor(std)
+        mean = torch.as_tensor(mean).float()
+        std = torch.as_tensor(std).float()
         std_inv = 1 / (std + 1e-7)
         mean_inv = -mean * std_inv
         super().__init__(mean=mean_inv, std=std_inv)
