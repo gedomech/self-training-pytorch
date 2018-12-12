@@ -151,9 +151,11 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
                                                                                                          dices[2]))
 
         ## for val data
-        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', device=device)
+        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', alias='labeled',  device=device)
         for i, dice in enumerate(dices):
             metrics['{}/val/enet_{}'.format(name, i)] = dice
+
+        _, dice_mv = mv_test(nets, dataloader['val'], device=device)
 
         logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f}, {:.3f}, {:.3f} and mv {:.3f}'.format(epoch,
                                                                                                                  mode,
@@ -164,9 +166,6 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
                                                                                                                  dices[
                                                                                                                      2],
                                                                                                                  dice_mv))
-
-        _, dice_mv = mv_test(nets, dataloader['val'], device=device)
-
         metrics['{}/val/majority_voting'.format(name)] = dice_mv
 
         if dice_mv > best_dice_mv:
@@ -389,8 +388,13 @@ def run(argv):
                             dataAugment=False, equalize=False)
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
+
+    unlabeled_data.imgs = unlabeled_data.imgs[:20]
+    unlabeled_data.gts = unlabeled_data.gts[:20]
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
+    val_data.imgs = val_data.imgs[:20]
+    val_data.gts = val_data.gts[:20]
 
     unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,
