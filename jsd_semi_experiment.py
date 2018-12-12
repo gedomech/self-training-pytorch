@@ -192,8 +192,8 @@ def _show_mask(dataloader, img, gt, predict):
     assert gt.shape.__len__() == 2
     fig = plt.figure(1)
     plt.imshow(img)
-    plt.contour(gt, colors='red')
-    plt.contour(predict, colors='green')
+    plt.contour(gt.cpu(), colors='red')
+    plt.contour(predict.cpu(), colors='green')
     return fig
 
 
@@ -389,12 +389,12 @@ def run(argv):
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
 
-    unlabeled_data.imgs = unlabeled_data.imgs[:20]
-    unlabeled_data.gts = unlabeled_data.gts[:20]
+    # unlabeled_data.imgs = unlabeled_data.imgs[:20]
+    # unlabeled_data.gts = unlabeled_data.gts[:20]
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
-    val_data.imgs = val_data.imgs[:20]
-    val_data.gts = val_data.gts[:20]
+    # val_data.imgs = val_data.imgs[:20]
+    # val_data.gts = val_data.gts[:20]
 
     unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,
