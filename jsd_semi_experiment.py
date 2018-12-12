@@ -25,8 +25,8 @@ global device
 
 
 def get_default_parameter():
-    flags.DEFINE_integer('num_workers', default=4, help='number of workers used in dataloader')
-    flags.DEFINE_integer('batch_size', default=1, help='number of batch size')
+    flags.DEFINE_integer('num_workers', default=0, help='number of workers used in dataloader')
+    flags.DEFINE_integer('batch_size', default=4, help='number of batch size')
     flags.DEFINE_boolean('semi_train__update_labeled', default=True,
                          help='update the labeled image while self training')
     flags.DEFINE_boolean('semi_train__update_unlabeled', default=True,
@@ -46,10 +46,11 @@ def get_default_parameter():
     flags.DEFINE_multi_integer('milestones', default=[20, 40, 60, 80, 100, 120, 140, 160, 180],
                                help='milestones for full training')
     flags.DEFINE_float('gamma', default=0.8, help='gamma for lr_scheduler in full training')
-    flags.DEFINE_float('lr', default=0.001, help='lr for full training')
+    flags.DEFINE_float('lr', default=0.01, help='lr for full training')
     flags.DEFINE_float('lr_decay', default=0.2, help='decay of learning rate schedule')
-    flags.DEFINE_float('lamda', default=0.05, help='constant used during the training with unlabeled data')
+    flags.DEFINE_float('lamda', default=0.0, help='constant used during the training with unlabeled data')
     flags.DEFINE_multi_float('weight', default=[1, 1], help='weight balance for CE for full training')
+
 
 
 def get_unlabeled_loss(lossname='crossentropy', device=None):
@@ -61,6 +62,8 @@ def get_unlabeled_loss(lossname='crossentropy', device=None):
     else:
         raise NotImplementedError
     return criterion
+
+
 
 
 def load_checkpoint(labeled_data, torchnets, path: list):
@@ -332,37 +335,50 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
     for epoch in range(hparam['max_epoch']):
 
         best_dice_mv = evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, best_dice_mv=best_dice_mv,
-                                best=best_performance, name='train', writer=writer, mode='eval', savedirs=nets_path,
+                                best=best_performance, name='train', writer=writer, mode='train', savedirs=nets_path,
                                 logger=logger, device=device)
         # logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
+        for i in range (3):
+            assert nets_[i].training==True
 
         # train with labeled data
-        for _ in range(len(data_loaders['labeled'])):
+        for _ in range(len(data_loaders['unlabeled'])):
             # train with labeled data
             llost_lst, prediction_lst, dice_score_lst = [], [], []
-            for lab_loader, net_i in zip(data_loaders['labeled'], nets_):
+            for lab_loader, net_i,opt in zip(data_loaders['labeled'], nets_,optimizers):
                 imgs, masks, _ = image_batch_generator(lab_loader, device=device)
                 prediction, llost, dice_score = batch_labeled_loss(imgs, masks, net_i, lcriterion)
-                llost_lst.append(llost)
-                prediction_lst.append(prediction)
-
-            # train with unlabeled data
-            imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
-            pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
-            total_loss = []
-
-            if hparam['loss_name'] == 'crossentropy':
-                uloss_lst = [unlcriterion(unlab_pred, pseudolabel) for unlab_pred in unlab_preds]
-                total_loss = [x + hparam['lamda'] * y for x, y in zip(llost_lst, uloss_lst)]
-            elif hparam['loss_name'] == 'jsd':
-                uloss_lst = unlcriterion(unlab_preds)
-                total_loss = [x + uloss_lst for x in llost_lst]
+                opt.zero_grad()
+                llost.backward()
+                opt.step()
+                # llost_lst.append(llost)
+                # prediction_lst.append(prediction)
 
             for idx in range(len(optimizers)):
                 optimizers[idx].zero_grad()
-                total_loss[idx].backward()
+                llost_lst[idx].backward()
                 optimizers[idx].step()
                 schedulers[idx].step()
+
+
+
+            # # train with unlabeled data
+            # imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
+            # pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
+            # total_loss = []
+            #
+            # if hparam['loss_name'] == 'crossentropy':
+            #     uloss_lst = [unlcriterion(unlab_pred, pseudolabel) for unlab_pred in unlab_preds]
+            #     total_loss = [x + hparam['lamda'] * y for x, y in zip(llost_lst, uloss_lst)]
+            # elif hparam['loss_name'] == 'jsd':
+            #     uloss_lst = unlcriterion(unlab_preds)
+            #     total_loss = [x + uloss_lst for x in llost_lst]
+            #
+            # for idx in range(len(optimizers)):
+            #     optimizers[idx].zero_grad()
+            #     total_loss[idx].backward()
+            #     optimizers[idx].step()
+            #     schedulers[idx].step()
 
 
 def run(argv):
@@ -389,12 +405,12 @@ def run(argv):
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
 
-    # unlabeled_data.imgs = unlabeled_data.imgs[:20]
-    # unlabeled_data.gts = unlabeled_data.gts[:20]
+    unlabeled_data.imgs = unlabeled_data.imgs[:200]
+    unlabeled_data.gts = unlabeled_data.gts[:200]
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
-    # val_data.imgs = val_data.imgs[:20]
-    # val_data.gts = val_data.gts[:20]
+    val_data.imgs = val_data.imgs[:200]
+    val_data.gts = val_data.gts[:200]
 
     unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,
