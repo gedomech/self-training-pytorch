@@ -7,6 +7,10 @@ import torch
 import copy
 import pathlib
 import matplotlib.pyplot as plt
+import platform
+
+if platform.system() == 'Linux':
+    plt.switch_backend('agg')
 
 from absl import flags, app
 from data.dataloader import ISICdata
@@ -17,9 +21,10 @@ from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR
 from utils.logger import config_logger
 import torch.nn as nn
+
 logger = logging.getLogger(__name__)
 logger.parent = None
-warnings.filterwarnings('ignore')
+# warnings.filterwarnings('ignore')
 global writer
 global device
 
@@ -39,19 +44,18 @@ def get_default_parameter():
                          help='load_pretrain for self training')
     flags.DEFINE_string('model_path', default='checkpoints', help='path to the pretrained model')
     flags.DEFINE_string('loss_name', default='crossentropy', help='loss for semi supervised learning')
-    flags.DEFINE_string('save_dir', default='demo_jsd/test', help='path to save')
+    flags.DEFINE_string('save_dir', default='demo_jsd/test_hard', help='path to save')
     flags.DEFINE_float('labeled_percentate', default=1.0, help='how much percentage of labeled data you use')
 
-    flags.DEFINE_integer('max_epoch', default=100, help='max_epoch for full training')
+    flags.DEFINE_integer('max_epoch', default=50, help='max_epoch for full training')
     flags.DEFINE_multi_integer('milestones', default=[20, 40, 60, 80, 100, 120, 140, 160, 180],
                                help='milestones for full training')
-    flags.DEFINE_float('gamma', default=0.8, help='gamma for lr_scheduler in full training')
+    flags.DEFINE_float('gamma', default=0.5, help='gamma for lr_scheduler in full training')
     flags.DEFINE_float('lr', default=0.0001, help='lr for full training')
     flags.DEFINE_float('lr_decay', default=0.2, help='decay of learning rate schedule')
-    flags.DEFINE_float('lamda', default=1, help='constant used during the training with unlabeled data')
+    flags.DEFINE_float('lamda', default=0.5, help='constant used during the training with unlabeled data')
     flags.DEFINE_multi_float('weight', default=[1, 1], help='weight balance for CE for full training')
     flags.DEFINE_string('voting_strategy', default='hard', help='soft voting or hard voting')
-
 
 
 def get_unlabeled_loss(lossname='crossentropy', device=None):
@@ -63,8 +67,6 @@ def get_unlabeled_loss(lossname='crossentropy', device=None):
     else:
         raise NotImplementedError
     return criterion
-
-
 
 
 def load_checkpoint(labeled_data, torchnets, path: list):
@@ -90,9 +92,20 @@ def batch_labeled_loss(img, mask, net, criterion):
     return pred, labeled_loss, ds
 
 
-def compute_pseudolabels(distributions: list):
-    distributions = torch.cat([d.unsqueeze(0) for d in distributions], 0)
-    return torch.mean(distributions, dim=0).max(1)[1]
+def compute_pseudolabels(distributions: list, strategy):
+    assert strategy in ('soft', 'hard')
+    if strategy == 'soft':
+        distributions = torch.cat([d.unsqueeze(0) for d in distributions], 0)
+        return torch.mean(distributions, dim=0).max(1)[1]
+    else:
+        labels = torch.zeros(distributions[0].shape[0], distributions[0].shape[2], distributions[0].shape[3]).to(
+            'cuda' if distributions[0].is_cuda else 'cpu')
+        for d in distributions:
+            labels += d.max(1)[1].float()
+        labels = labels / len(distributions)
+        labels = (labels > 0.5).long()
+
+        return labels
 
 
 def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=None, save_dirs=''):
@@ -123,7 +136,7 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
 
 
 def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, writer=None, mode='eval', savedirs=None,
-             logger=None, device=None):
+             logger=None, device=None, hparam=None):
     with torch.no_grad():
 
         metrics = {}
@@ -144,7 +157,7 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
                                                                                                        dice2,
                                                                                                        dice3))
         # for unlabeled data
-        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval', alias='unlabeled', device=device)
+        dices = _evaluate_mm(nets, dataloader['unlabeled'], mode='eval', alias='unlabeled', epoch=epoch, device=device)
         for i, dice in enumerate(dices):
             metrics['{}/unlabeled/enet_{}'.format(name, i)] = dice
 
@@ -155,11 +168,11 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
                                                                                                          dices[2]))
 
         ## for val data
-        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', alias='val',  device=device)
+        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', alias='val', epoch=epoch, device=device)
         for i, dice in enumerate(dices):
             metrics['{}/val/enet_{}'.format(name, i)] = dice
 
-        _, dice_mv = mv_test(nets, dataloader['val'], epoch, device=device)
+        _, dice_mv = mv_test(nets, dataloader['val'], epoch, device=device, hparam=hparam)
 
         logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f}, {:.3f}, {:.3f} and mv {:.3f}'.format(epoch,
                                                                                                                  mode,
@@ -183,23 +196,24 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
         return best_dice_mv
 
 
-def _evaluate_mm(nets, dataloader, mode, alias, device):
-    return [_evaluate(net, dataloader, mode, model_name=i, alias=alias, device=device) for (net, i) in zip(nets, ('0', '1', '2'))]
+def _evaluate_mm(nets, dataloader, mode, alias, epoch, device):
+    return [_evaluate(net, dataloader, mode, model_name=i, epoch=epoch, alias=alias, device=device) for (net, i) in
+            zip(nets, ('0', '1', '2'))]
 
 
 def _show_mask(dataloader, img, gt, predict):
-
     img = np.array(dataloader.dataset.inverse_std(img.cpu().float()))
     assert img.shape.__len__() == 3
     assert img.shape[2] == 3
     gt = gt.squeeze()
     assert gt.shape.__len__() == 2
     fig = plt.figure(1)
-    plt.title(dice_loss(predict,gt))
+    plt.title(dice_loss(predict, gt))
 
     plt.imshow(img)
     plt.contour(gt.cpu(), colors='red')
     plt.contour(predict.cpu(), colors='green')
+
     return fig
 
 
@@ -231,7 +245,7 @@ def _evaluate(net, dataloader, mode='eval', model_name=None, alias=None, epoch=0
     return dice_meter.value()[0]
 
 
-def mv_test(nets_, test_loader_, epoch,device):
+def mv_test(nets_, test_loader_, epoch, device, hparam):
     class_number = 2
 
     """
@@ -246,7 +260,7 @@ def mv_test(nets_, test_loader_, epoch,device):
     mv_dice_score_meter = AverageValueMeter()
 
     with torch.no_grad():
-        for i, (img, mask, (name,_)) in enumerate(test_loader_):
+        for i, (img, mask, (name, _)) in enumerate(test_loader_):
 
             (img, mask) = img.to(device), mask.to(device)
             distri = []
@@ -257,11 +271,12 @@ def mv_test(nets_, test_loader_, epoch,device):
                 dice_test = dice_loss(pred2segmentation(pred_test), mask.squeeze(1))
                 dice_meters_test[idx].add(dice_test)
 
-            pseudolabels = compute_pseudolabels(distri)
+            pseudolabels = compute_pseudolabels(distri, hparam['voting_strategy'])
+
             for j, _name in enumerate(name):
                 if _name in showimgList:
                     fig = _show_mask(test_loader_, img[j], mask[j], pseudolabels[j])
-                    writer.add_figure('%s/%s/%s' % ('ensemble', '', os.path.basename(_name)), fig, epoch)
+                    writer.add_figure('%s/%s/%s' % ('ensemble', 'ensemble', os.path.basename(_name)), fig, epoch)
             mv_dice_score = dice_loss(pseudolabels, mask.squeeze(1))
             mv_dice_score_meter.add(mv_dice_score)
 
@@ -308,9 +323,10 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
     best_performance = False
     global logger
     global writer
-    optimizers = [torch.optim.Adam(nets_[0].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
-                  torch.optim.Adam(nets_[1].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay']),
-                  torch.optim.Adam(nets_[2].parameters(), lr=hparam['lr'], weight_decay=hparam['lr_decay'])]
+    optimizers = [
+        torch.optim.Adam(nets_[0].parameters(), lr=hparam['lr'], betas=(0.9, 0.999), weight_decay=hparam['lr_decay']),
+        torch.optim.Adam(nets_[1].parameters(), lr=hparam['lr'], betas=(0.9, 0.999), weight_decay=hparam['lr_decay']),
+        torch.optim.Adam(nets_[2].parameters(), lr=hparam['lr'], betas=(0.9, 0.999), weight_decay=hparam['lr_decay'])]
 
     schedulers = [MultiStepLR(optimizer=optimizers[0], milestones=hparam['milestones'], gamma=hparam['gamma']),
                   MultiStepLR(optimizer=optimizers[1], milestones=hparam['milestones'], gamma=hparam['gamma']),
@@ -327,8 +343,13 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
     nets_path = [os.path.join(writername, 'enet_0_semi_best.pth'),
                  os.path.join(writername, 'enet_1_semi_best.pth'),
                  os.path.join(writername, 'enet_2_semi_best.pth')]
-
+    import shutil
+    try:
+        shutil.rmtree(writername)
+    except Exception as e:
+        print(e)
     writer = SummaryWriter(writername)
+
     save_hparams(hparam, writername)
     logger = config_logger(logger, writername)
 
@@ -345,16 +366,16 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
 
         best_dice_mv = evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, best_dice_mv=best_dice_mv,
                                 best=best_performance, name='train', writer=writer, mode='eval', savedirs=nets_path,
-                                logger=logger, device=device)
+                                logger=logger, device=device, hparam=hparam)
         # logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
-        for i in range (3):
-            assert nets_[i].training==True
+        for i in range(3):
+            assert nets_[i].training == True
 
         # train with labeled data
         for _ in range(len(data_loaders['unlabeled'])):
             # train with labeled data
             llost_lst, prediction_lst, dice_score_lst = [], [], []
-            for lab_loader, net_i,opt in zip(data_loaders['labeled'], nets_,optimizers):
+            for lab_loader, net_i, opt in zip(data_loaders['labeled'], nets_, optimizers):
                 imgs, masks, _ = image_batch_generator(lab_loader, device=device)
                 prediction, llost, dice_score = batch_labeled_loss(imgs, masks, net_i, lcriterion)
                 llost_lst.append(llost)
@@ -362,12 +383,13 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
 
             # train with unlabeled data
             imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
-            pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_,hparam['voting_strategy'])
+            pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_, hparam['voting_strategy'])
             total_loss = []
 
             if hparam['loss_name'] == 'crossentropy':
                 uloss_lst = [unlcriterion(unlab_pred, pseudolabel) for unlab_pred in unlab_preds]
-                total_loss = [(1/1+hparam['lamda'])*x + (hparam['lamda']/1+hparam['lamda']) * y for x, y in zip(llost_lst, uloss_lst)]
+                total_loss = [(1 / 1 + hparam['lamda']) * x + (hparam['lamda'] / 1 + hparam['lamda']) * y for x, y in
+                              zip(llost_lst, uloss_lst)]
             elif hparam['loss_name'] == 'jsd':
                 uloss_lst = unlcriterion(unlab_preds)
                 total_loss = [x + uloss_lst for x in llost_lst]
@@ -375,7 +397,7 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
             for idx in range(len(optimizers)):
                 optimizers[idx].zero_grad()
                 total_loss[idx].backward()
-                nn.utils.clip_grad_norm(nets_[idx].parameters(), hparam['lr']*0.5)
+                # nn.utils.clip_grad_norm(nets_[idx].parameters(), 5e-5)
                 optimizers[idx].step()
                 schedulers[idx].step()
 
@@ -404,12 +426,12 @@ def run(argv):
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
 
-    unlabeled_data.imgs = unlabeled_data.imgs[:200]
-    unlabeled_data.gts = unlabeled_data.gts[:200]
+    # unlabeled_data.imgs = unlabeled_data.imgs[:200]
+    # unlabeled_data.gts = unlabeled_data.gts[:200]
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
-    val_data.imgs = val_data.imgs[:200]
-    val_data.gts = val_data.gts[:200]
+    # val_data.imgs = val_data.imgs[:200]
+    # val_data.gts = val_data.gts[:200]
 
     unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,

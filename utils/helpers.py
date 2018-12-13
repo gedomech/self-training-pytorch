@@ -239,8 +239,8 @@ def get_mv_based_labels(imgs, nets,strategy):
             pred = F.softmax(net_i(imgs), 1)
             prediction.append(pred)
             distributions += pred.max(1)[1]
-        distributions /= len(nets)
-        distributions = (distributions<0.5).long()
+        distributions = distributions.float()/len(nets)
+        distributions = (distributions>0.5).long()
         return distributions, prediction
 
 
