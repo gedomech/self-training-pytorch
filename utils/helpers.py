@@ -220,16 +220,29 @@ def test(nets_, test_loader_, device, **kwargs):
     return [dice_meters_test[idx] for idx in range(3)], mv_dice_score_meter
 
 
-def get_mv_based_labels(imgs, nets):
+def get_mv_based_labels(imgs, nets,strategy):
+    assert strategy in ('hard', 'soft')
     class_number = 2
     prediction = []
-    distributions = torch.zeros([imgs.shape[0], class_number, imgs.shape[2], imgs.shape[3]]).to(imgs.device)
-    for idx, (net_i) in enumerate(nets):
-        pred = F.softmax(net_i(imgs))
-        prediction.append(pred)
-        distributions += pred
-    distributions /= 3
-    return pred2segmentation(distributions), prediction
+    if strategy =='soft':
+
+        distributions = torch.zeros([imgs.shape[0], class_number, imgs.shape[2], imgs.shape[3]]).to(imgs.device)
+        for idx, (net_i) in enumerate(nets):
+            pred = F.softmax(net_i(imgs),1)
+            prediction.append(pred)
+            distributions += pred
+        distributions /= 3
+        return pred2segmentation(distributions), prediction
+    else:
+        distributions = torch.zeros([imgs.shape[0], imgs.shape[2], imgs.shape[3]]).long().to(imgs.device)
+        for idx, (net_i) in enumerate(nets):
+            pred = F.softmax(net_i(imgs), 1)
+            prediction.append(pred)
+            distributions += pred.max(1)[1]
+        distributions /= len(nets)
+        distributions = (distributions<0.5).long()
+        return distributions, prediction
+
 
 
 def cotraining(prediction, pseudolabel, nets, criterion, device):

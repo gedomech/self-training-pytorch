@@ -39,7 +39,7 @@ def get_default_parameter():
                          help='load_pretrain for self training')
     flags.DEFINE_string('model_path', default='checkpoints', help='path to the pretrained model')
     flags.DEFINE_string('loss_name', default='crossentropy', help='loss for semi supervised learning')
-    flags.DEFINE_string('save_dir', default='demo_jsd/selftrain_0.04/use_ce', help='path to save')
+    flags.DEFINE_string('save_dir', default='demo_jsd/test', help='path to save')
     flags.DEFINE_float('labeled_percentate', default=1.0, help='how much percentage of labeled data you use')
 
     flags.DEFINE_integer('max_epoch', default=100, help='max_epoch for full training')
@@ -50,6 +50,7 @@ def get_default_parameter():
     flags.DEFINE_float('lr_decay', default=0.2, help='decay of learning rate schedule')
     flags.DEFINE_float('lamda', default=1, help='constant used during the training with unlabeled data')
     flags.DEFINE_multi_float('weight', default=[1, 1], help='weight balance for CE for full training')
+    flags.DEFINE_string('voting_strategy', default='hard', help='soft voting or hard voting')
 
 
 
@@ -127,11 +128,11 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
 
         metrics = {}
         # for the labeled data
-        dice1 = _evaluate(net=nets[0], dataloader=dataloader['labeled'][0], mode='eval', model_name='1',
+        dice1 = _evaluate(net=nets[0], dataloader=dataloader['labeled'][0], mode='eval', model_name='0',
                           alias='labeled', epoch=epoch, device=device)
-        dice2 = _evaluate(net=nets[1], dataloader=dataloader['labeled'][1], mode='eval', model_name='2',
+        dice2 = _evaluate(net=nets[1], dataloader=dataloader['labeled'][1], mode='eval', model_name='1',
                           alias='labeled', epoch=epoch, device=device)
-        dice3 = _evaluate(net=nets[2], dataloader=dataloader['labeled'][2], mode='eval', model_name='3',
+        dice3 = _evaluate(net=nets[2], dataloader=dataloader['labeled'][2], mode='eval', model_name='2',
                           alias='labeled', epoch=epoch, device=device)
         metrics['{}/labeled/enet_{}'.format(name, 0)] = dice1
         metrics['{}/labeled/enet_{}'.format(name, 1)] = dice2
@@ -154,11 +155,11 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
                                                                                                          dices[2]))
 
         ## for val data
-        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', alias='labeled',  device=device)
+        dices = _evaluate_mm(nets, dataloader['val'], mode='eval', alias='val',  device=device)
         for i, dice in enumerate(dices):
             metrics['{}/val/enet_{}'.format(name, i)] = dice
 
-        _, dice_mv = mv_test(nets, dataloader['val'], device=device)
+        _, dice_mv = mv_test(nets, dataloader['val'], epoch, device=device)
 
         logger.info('at epoch: {:3d}, under {} mode, val_data dice: {:.3f}, {:.3f}, {:.3f} and mv {:.3f}'.format(epoch,
                                                                                                                  mode,
@@ -183,7 +184,7 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
 
 
 def _evaluate_mm(nets, dataloader, mode, alias, device):
-    return [_evaluate(net, dataloader, mode, model_name=i, alias=alias, device=device) for (net, i) in zip(nets, ('1', '2', '3'))]
+    return [_evaluate(net, dataloader, mode, model_name=i, alias=alias, device=device) for (net, i) in zip(nets, ('0', '1', '2'))]
 
 
 def _show_mask(dataloader, img, gt, predict):
@@ -194,6 +195,8 @@ def _show_mask(dataloader, img, gt, predict):
     gt = gt.squeeze()
     assert gt.shape.__len__() == 2
     fig = plt.figure(1)
+    plt.title(dice_loss(predict,gt))
+
     plt.imshow(img)
     plt.contour(gt.cpu(), colors='red')
     plt.contour(predict.cpu(), colors='green')
@@ -219,7 +222,7 @@ def _evaluate(net, dataloader, mode='eval', model_name=None, alias=None, epoch=0
             for j, _name in enumerate(name):
                 if _name in showimgList:
                     fig = _show_mask(dataloader, img[j], gt[j], pred_mask[j])
-                    writer.add_figure('%s/%s/%s' % (model_name, alias, os.path.basename(name[0])), fig, epoch)
+                    writer.add_figure('%s/%s/%s' % (model_name, alias, os.path.basename(_name)), fig, epoch)
 
             dice_meter.add(dice_loss(pred_mask, gt))
     if mode == 'eval':
@@ -228,12 +231,14 @@ def _evaluate(net, dataloader, mode='eval', model_name=None, alias=None, epoch=0
     return dice_meter.value()[0]
 
 
-def mv_test(nets_, test_loader_, device):
+def mv_test(nets_, test_loader_, epoch,device):
     class_number = 2
 
     """
     This function performs the evaluation with the test set containing labeled images.
     """
+    global writer
+    showimgList = test_loader_.dataset.imgs[:10]
 
     map_(lambda x: x.eval(), nets_)
 
@@ -241,7 +246,7 @@ def mv_test(nets_, test_loader_, device):
     mv_dice_score_meter = AverageValueMeter()
 
     with torch.no_grad():
-        for i, (img, mask, _) in enumerate(test_loader_):
+        for i, (img, mask, (name,_)) in enumerate(test_loader_):
 
             (img, mask) = img.to(device), mask.to(device)
             distri = []
@@ -253,6 +258,10 @@ def mv_test(nets_, test_loader_, device):
                 dice_meters_test[idx].add(dice_test)
 
             pseudolabels = compute_pseudolabels(distri)
+            for j, _name in enumerate(name):
+                if _name in showimgList:
+                    fig = _show_mask(test_loader_, img[j], mask[j], pseudolabels[j])
+                    writer.add_figure('%s/%s/%s' % ('ensemble', '', os.path.basename(_name)), fig, epoch)
             mv_dice_score = dice_loss(pseudolabels, mask.squeeze(1))
             mv_dice_score_meter.add(mv_dice_score)
 
@@ -348,15 +357,12 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
             for lab_loader, net_i,opt in zip(data_loaders['labeled'], nets_,optimizers):
                 imgs, masks, _ = image_batch_generator(lab_loader, device=device)
                 prediction, llost, dice_score = batch_labeled_loss(imgs, masks, net_i, lcriterion)
-                # opt.zero_grad()
-                # llost.backward()
-                # opt.step()
                 llost_lst.append(llost)
                 prediction_lst.append(prediction)
 
             # train with unlabeled data
             imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
-            pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
+            pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_,hparam['voting_strategy'])
             total_loss = []
 
             if hparam['loss_name'] == 'crossentropy':
