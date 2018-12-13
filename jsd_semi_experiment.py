@@ -16,7 +16,7 @@ from utils.helpers import *
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR
 from utils.logger import config_logger
-
+import torch.nn as nn
 logger = logging.getLogger(__name__)
 logger.parent = None
 warnings.filterwarnings('ignore')
@@ -354,10 +354,6 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
                 llost_lst.append(llost)
                 prediction_lst.append(prediction)
 
-
-
-
-
             # train with unlabeled data
             imgs, _, _ = image_batch_generator(data_loaders['unlabeled'], device=device)
             pseudolabel, unlab_preds = get_mv_based_labels(imgs, nets_)
@@ -373,6 +369,7 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
             for idx in range(len(optimizers)):
                 optimizers[idx].zero_grad()
                 total_loss[idx].backward()
+                nn.utils.clip_grad_norm(nets_[idx].parameters(), hparam['lr']*0.5)
                 optimizers[idx].step()
                 schedulers[idx].step()
 
