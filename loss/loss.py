@@ -42,6 +42,7 @@ class OracleLoss2d(nn.Module):
         :return:
         """
 
+
         # producing the oracle mask to consider true predictions
         _outputs = outputs.max(1)[1]
         oracle_mask = (_outputs == targets).float()
@@ -60,6 +61,28 @@ def get_citerion(lossname, **kwargs):
     else:
         raise NotImplementedError
     return criterion
+
+
+class JSDLoss(nn.Module):
+
+    def __init__(self, reduce=True, size_average=False):
+        super().__init__()
+
+        self.loss = nn.KLDivLoss(reduce=reduce, size_average=size_average)
+
+    def forward(self, ensemble_probs):
+        # n: number of distributions
+        # b: batch size
+        # c: number of classes
+        # (h, w): image dimensions
+        n, b, c, h, w = ensemble_probs.shape
+        mixture_dist = ensemble_probs.mean(0)
+        entropy_mixture = torch.log(ensemble_probs).mean(0)
+
+
+        # JSD = the entropy of the mixture - the mixture of the entropy
+        # return self.loss(torch.log(ensemble_probs), mixture_dist) / (h * w)
+        return self.loss(entropy_mixture, mixture_dist) / (h * w)
 
 
 if __name__ == '__main__':

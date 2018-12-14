@@ -15,7 +15,7 @@ if platform.system() == 'Linux':
 from absl import flags, app
 from data.dataloader import ISICdata
 from models.enet import Enet
-from loss.loss import CrossEntropyLoss2d, JensenShannonDivergence
+from loss.loss import CrossEntropyLoss2d, JensenShannonDivergence, JSDLoss
 from utils.helpers import *
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR
@@ -63,7 +63,8 @@ def get_unlabeled_loss(lossname='crossentropy', device=None):
         criterion = CrossEntropyLoss2d([1, 1])
         criterion.to(device)
     elif lossname == 'jsd':
-        criterion = JensenShannonDivergence(reduce=True, size_average=False)
+        # criterion = JensenShannonDivergence(reduce=True, size_average=False)
+        criterion = JSDLoss(reduce=True, size_average=False)
     else:
         raise NotImplementedError
     return criterion
@@ -391,12 +392,16 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
                 total_loss = [(1 / 1 + hparam['lamda']) * x + (hparam['lamda'] / 1 + hparam['lamda']) * y for x, y in
                               zip(llost_lst, uloss_lst)]
             elif hparam['loss_name'] == 'jsd':
-                uloss_lst = unlcriterion(unlab_preds)
+                distributions = torch.cat([d.unsqueeze(0) for d in unlab_preds], 0)
+                uloss_lst = unlcriterion(distributions)
+
+                # uloss_lst = unlcriterion(unlab_preds)
                 total_loss = [x + uloss_lst for x in llost_lst]
 
             for idx in range(len(optimizers)):
                 optimizers[idx].zero_grad()
-                total_loss[idx].backward()
+                # total_loss[idx].backward()
+                total_loss[idx].backward(retain_graph=True)
                 # nn.utils.clip_grad_norm(nets_[idx].parameters(), 5e-5)
                 optimizers[idx].step()
                 schedulers[idx].step()
@@ -426,12 +431,12 @@ def run(argv):
     unlabeled_data = ISICdata(root=root, model='unlabeled', mode='semi', transform=True,
                               dataAugment=False, equalize=False)
 
-    # unlabeled_data.imgs = unlabeled_data.imgs[:200]
-    # unlabeled_data.gts = unlabeled_data.gts[:200]
+    unlabeled_data.imgs = unlabeled_data.imgs[:20]
+    unlabeled_data.gts = unlabeled_data.gts[:20]
     val_data = ISICdata(root=root, model='val', mode='semi', transform=True,
                         dataAugment=False, equalize=False)
-    # val_data.imgs = val_data.imgs[:200]
-    # val_data.gts = val_data.gts[:200]
+    val_data.imgs = val_data.imgs[:20]
+    val_data.gts = val_data.gts[:20]
 
     unlabeled_loader_params = {'batch_size': hparam['batch_size'],
                                'shuffle': True,
