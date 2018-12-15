@@ -136,7 +136,7 @@ def save_checkpoint(dices, dice_mv, nets, epoch, best_performance=False, name=No
             return
 
 
-def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, writer=None, mode='eval', savedirs=None,
+def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best_performance=False, name=None, writer=None, mode='eval', savedirs=None,
              logger=None, device=None, hparam=None):
     with torch.no_grad():
 
@@ -192,7 +192,7 @@ def evaluate(epoch, nets, dataloader, best_dice_mv=-1, best=False, name=None, wr
 
         if mode == 'eval':
             writer.add_scalars(name, metrics, epoch)
-            save_checkpoint(dices, dice_mv, nets, epoch, best_performance=best, save_dirs=savedirs)
+            save_checkpoint(dices, dice_mv, nets, epoch, best_performance=best_performance, save_dirs=savedirs)
 
         return best_dice_mv
 
@@ -365,9 +365,8 @@ def train_ensemble(nets_: list, data_loaders, hparam, device):
     logger.info("STARTING THE ENSEMBLE TRAINING!!!!")
     for epoch in range(hparam['max_epoch']):
 
-        best_dice_mv = evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, best_dice_mv=best_dice_mv,
-                                best=best_performance, name='train', writer=writer, mode='eval', savedirs=nets_path,
-                                logger=logger, device=device, hparam=hparam)
+        best_dice_mv = evaluate(epoch + 1, nets=nets_, dataloader=data_loaders, best_dice_mv=best_dice_mv, name='train',
+                                writer=writer, mode='eval', savedirs=nets_path, logger=logger, device=device, hparam=hparam)
         # logger.info('epoch = {0:4d}/{1:4d} training baseline'.format(epoch, hparam['max_epoch']))
         for i in range(3):
             assert nets_[i].training == True
